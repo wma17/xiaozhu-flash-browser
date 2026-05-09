@@ -31,6 +31,10 @@ let pendingSavePrompt = null;
 let windowProfileId = null; // each window is bound to one profile (Chrome-style)
 let menuCloseHandler = null;
 const preloadPath = 'file://' + document.location.pathname.split('/').slice(0, -1).join('/') + '/webview-preload.js';
+const HISTORY_LIMIT = 2000;
+const HISTORY_REPEAT_WRITE_MS = 30000;
+const LIST_RENDER_LIMIT = 400;
+let historySaveTimer = null;
 
 const $ = (id) => document.getElementById(id);
 const $topUrl = $('url');
@@ -69,6 +73,10 @@ async function loadStores() {
     ipcRenderer.invoke('app:home-url'),
   ]);
   history = h || []; bookmarks = bm || []; profiles = pr || []; passwords = pw || [];
+  if (history.length > HISTORY_LIMIT) {
+    history.length = HISTORY_LIMIT;
+    saveHistory();
+  }
   skippedSites = sk || []; notes = nt || []; tasks = tk || [];
   settings = Object.assign(settings, st || {});
   settings.identity = settings.identity || {};
@@ -102,6 +110,20 @@ const saveSkippedSites = () => ipcRenderer.invoke('store:set', 'pw_skipped_sites
 const saveSettings     = () => ipcRenderer.invoke('store:set', 'settings', settings);
 const saveNotes        = () => ipcRenderer.invoke('store:set', 'notes', notes);
 const saveTasks        = () => ipcRenderer.invoke('store:set', 'tasks', tasks);
+function saveHistorySoon() {
+  clearTimeout(historySaveTimer);
+  historySaveTimer = setTimeout(() => {
+    historySaveTimer = null;
+    saveHistory();
+  }, 700);
+}
+function flushHistorySave() {
+  if (!historySaveTimer) return;
+  clearTimeout(historySaveTimer);
+  historySaveTimer = null;
+  saveHistory();
+}
+window.addEventListener('beforeunload', flushHistorySave);
 
 // ---------- utility ----------
 function normalizeInput(input) {
@@ -818,10 +840,19 @@ function recordHistory(tab) {
   if (!tab || !tab.url) return;
   if (tab.url.startsWith('about:') || tab.url === 'data:') return;
   const last = history[0];
-  if (last && last.url === tab.url) { last.visitedAt = Date.now(); saveHistory(); return; }
-  history.unshift({ url: tab.url, title: tab.title || tab.url, visitedAt: Date.now(), profileId: tab.profileId });
-  if (history.length > 5000) history.length = 5000;
-  saveHistory();
+  const now = Date.now();
+  if (last && last.url === tab.url) {
+    if (now - (last.visitedAt || 0) > HISTORY_REPEAT_WRITE_MS) {
+      last.visitedAt = now;
+      saveHistorySoon();
+      if (currentRoute === 'home') renderHomeContinue();
+      else if (currentRoute === 'recent') renderRecent();
+    }
+    return;
+  }
+  history.unshift({ url: tab.url, title: tab.title || tab.url, visitedAt: now, profileId: tab.profileId });
+  if (history.length > HISTORY_LIMIT) history.length = HISTORY_LIMIT;
+  saveHistorySoon();
   if (currentRoute === 'home') renderHomeContinue();
   else if (currentRoute === 'recent') renderRecent();
 }
@@ -916,14 +947,14 @@ function renderFavorites() {
   const items = q ? base.filter(b => (b.title || '').toLowerCase().includes(q) || (b.url || '').toLowerCase().includes(q)) : base;
   $('fav-count').textContent = items.length + ' ' + i18n.t(items.length === 1 ? 'common.item' : 'common.items');
   const list = $('fav-list'); list.innerHTML = '';
-  for (const e of items.slice(0, 1000)) list.appendChild(entryEl(e, 'fav'));
+  for (const e of items.slice(0, LIST_RENDER_LIMIT)) list.appendChild(entryEl(e, 'fav'));
 }
 function renderRecent() {
   const q = ($('rec-search').value || '').toLowerCase();
   const items = q ? history.filter(h => (h.title || '').toLowerCase().includes(q) || (h.url || '').toLowerCase().includes(q)) : history;
   $('rec-count').textContent = items.length + ' ' + i18n.t(items.length === 1 ? 'common.item' : 'common.items');
   const list = $('rec-list'); list.innerHTML = '';
-  for (const e of items.slice(0, 1000)) list.appendChild(entryEl(e, 'rec'));
+  for (const e of items.slice(0, LIST_RENDER_LIMIT)) list.appendChild(entryEl(e, 'rec'));
 }
 function entryEl(e, kind) {
   const el = document.createElement('div');
@@ -973,24 +1004,23 @@ function renderWindows() {
 async function renderProfiles() {
   const list = $('profile-list'); list.innerHTML = '';
   ensureProfiles();
-  // Kick off async cookie counts
-  const stats = {};
-  await Promise.all(profiles.map(async p => {
-    stats[p.id] = await ipcRenderer.invoke('profile:stats', p);
-  }));
+  const pwCounts = new Map();
+  for (const pw of passwords) {
+    if (!pw.profileId) continue;
+    pwCounts.set(pw.profileId, (pwCounts.get(pw.profileId) || 0) + 1);
+  }
   for (const p of profiles) {
     const card = document.createElement('div');
     card.className = 'profile-card';
-    const s = stats[p.id] || { cookies: 0 };
     const isDefault = p.id === settings.defaultProfileId;
-    const pwCount = passwords.filter(pw => pw.profileId === p.id).length;
+    const pwCount = pwCounts.get(p.id) || 0;
     card.innerHTML =
       '<div class="swatch" style="background:' + p.color + '"></div>' +
       '<div>' +
         '<div class="pc-name">' + escapeHtml(p.name) +
           (isDefault ? '<span class="pc-tag default">' + escapeHtml(i18n.t('prof.default')) + '</span>' : '') +
         '</div>' +
-        '<div class="pc-meta">' + s.cookies + escapeHtml(i18n.t('prof.cookies')) +
+        '<div class="pc-meta"><span data-stat="cookies">…</span>' + escapeHtml(i18n.t('prof.cookies')) +
           ' · ' + pwCount + ' ' + escapeHtml(i18n.t('prof.passwords_count')) +
         '</div>' +
       '</div>' +
@@ -1033,6 +1063,14 @@ async function renderProfiles() {
       renderProfiles();
     });
     list.appendChild(card);
+    ipcRenderer.invoke('profile:stats', p).then((s) => {
+      if (!document.body.contains(card)) return;
+      const el = card.querySelector('[data-stat="cookies"]');
+      if (el) el.textContent = (s && Number.isFinite(s.cookies)) ? s.cookies : 0;
+    }).catch(() => {
+      const el = card.querySelector('[data-stat="cookies"]');
+      if (el) el.textContent = '0';
+    });
   }
 }
 $('profile-create-btn').addEventListener('click', async () => {
@@ -1232,7 +1270,7 @@ function renderPasswords() {
     list.innerHTML = '<div class="placeholder" style="padding: 16px; height: auto;"><div>' + escapeHtml(i18n.t('pw.empty')) + '</div></div>';
     return;
   }
-  for (const p of items.slice(0, 1000)) {
+  for (const p of items.slice(0, LIST_RENDER_LIMIT)) {
     const row = document.createElement('div');
     row.className = 'entry';
     const prof = profileById(p.profileId);
@@ -1563,7 +1601,7 @@ function renderLibrary() {
     grid.innerHTML = '<div class="placeholder" style="grid-column:1/-1;padding:20px;height:auto;"><div>' + escapeHtml(i18n.t('lib.empty')) + '</div></div>';
     return;
   }
-  for (const it of items.slice(0, 1000)) grid.appendChild(libCardEl(it));
+  for (const it of items.slice(0, LIST_RENDER_LIMIT)) grid.appendChild(libCardEl(it));
 }
 function libCardEl(item) {
   const el = document.createElement('div');

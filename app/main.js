@@ -20,12 +20,21 @@ const initialLaunchUrl = firstLaunchUrlArg();
 
 const windows = new Set();
 const pendingInit = new WeakMap();
+const profileStatsCache = new Map();
+const PROFILE_STATS_TTL = 30000;
 
 // Keep Flash games responsive, especially when multi-opening accounts.
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,BackForwardCache');
+app.commandLine.appendSwitch('disable-extensions');
+app.commandLine.appendSwitch('disable-component-extensions-with-background-pages');
+app.commandLine.appendSwitch('disable-default-apps');
+app.commandLine.appendSwitch('disable-sync');
+app.commandLine.appendSwitch('disable-translate');
+app.commandLine.appendSwitch('disable-domain-reliability');
+app.commandLine.appendSwitch('disable-smooth-scrolling');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
 app.commandLine.appendSwitch('enable-gpu-rasterization');
@@ -131,7 +140,8 @@ function readJson(name, fallback) {
 function writeJson(name, data) {
   try {
     fs.mkdirSync(path.dirname(storePath(name)), { recursive: true });
-    fs.writeFileSync(storePath(name), JSON.stringify(data, null, 2));
+    const spacing = name === 'history' ? 0 : 2;
+    fs.writeFileSync(storePath(name), JSON.stringify(data, null, spacing));
   } catch (e) { console.error('writeJson failed', name, e); }
 }
 
@@ -181,10 +191,17 @@ ipcMain.handle('window:open-many', (_e, url, profileIds) => {
   const ids = Array.isArray(profileIds) ? profileIds : [];
   const profiles = readJson('profiles', []);
   const allowed = new Set(profiles.map(p => p.id));
+  const uniqueIds = [];
   for (const id of ids) {
-    if (allowed.has(id)) createBrowserWindowWithUrl(url || homeUrl, id);
+    if (allowed.has(id) && !uniqueIds.includes(id)) uniqueIds.push(id);
   }
-  return true;
+  const targetUrl = url || homeUrl;
+  uniqueIds.forEach((id, index) => {
+    const open = () => createBrowserWindowWithUrl(targetUrl, id);
+    if (index === 0) open();
+    else setTimeout(open, Math.min(4000, index * 350));
+  });
+  return { queued: uniqueIds.length };
 });
 ipcMain.handle('speed:get', () => readSpeedFactor());
 ipcMain.handle('speed:state', () => readSpeedState());
@@ -219,10 +236,15 @@ ipcMain.handle('profile:partition', (_e, profile) => partitionFor(profile));
 ipcMain.handle('profile:stats', async (_e, profile) => {
   const part = partitionFor(profile);
   if (!part) return { cookies: 0 };
+  const key = (profile && profile.id) || part;
+  const cached = profileStatsCache.get(key);
+  if (cached && Date.now() - cached.ts < PROFILE_STATS_TTL) return cached.value;
   try {
     const ses = session.fromPartition(part);
     const cookies = await ses.cookies.get({});
-    return { cookies: cookies.length };
+    const value = { cookies: cookies.length };
+    profileStatsCache.set(key, { ts: Date.now(), value });
+    return value;
   } catch (e) { return { cookies: 0 }; }
 });
 ipcMain.handle('profile:clear', async (_e, profile) => {
@@ -231,6 +253,7 @@ ipcMain.handle('profile:clear', async (_e, profile) => {
   const ses = session.fromPartition(part);
   await ses.clearStorageData({ storages: ['cookies', 'localstorage', 'indexdb', 'websql', 'serviceworkers', 'cachestorage', 'filesystem', 'shadercache'] });
   await ses.clearCache();
+  if (profile && profile.id) profileStatsCache.delete(profile.id);
   return true;
 });
 
@@ -283,6 +306,7 @@ ipcMain.handle('task:cancel', (_e, taskId) => { cancelTimer(taskId); return true
 
 // --- Clear history/cookies/cache helpers ---
 ipcMain.handle('data:clear-cookies-cache-all', async () => {
+  profileStatsCache.clear();
   for (const ses of [session.defaultSession]) {
     await ses.clearStorageData({ storages: ['cookies', 'cachestorage'] });
     await ses.clearCache();
