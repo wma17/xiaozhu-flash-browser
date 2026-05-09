@@ -80,6 +80,7 @@ static bool g_notify_ready = false;
 static int g_notify_token = NOTIFY_TOKEN_INVALID;
 
 static void load_speed_interposer(void);
+static void ensure_speed_interposer_bound(void);
 
 static double clamp_speed(double value) {
   if (!(value > 0.0)) return 1.0;
@@ -164,13 +165,7 @@ static void apply_speed(double next) {
   }
   g_speed = next;
   if (g_speed != 1.0 && profile_uses_native_time()) {
-    if (!g_speed_rebound) {
-      if (!g_speed_interposer) load_speed_interposer();
-      if (g_speed_rebind_image) {
-        g_speed_rebind_image(g_real_plugin_name);
-        g_speed_rebound = true;
-      }
-    }
+    ensure_speed_interposer_bound();
   }
 }
 
@@ -356,6 +351,15 @@ static void load_speed_interposer(void) {
   }
 }
 
+static void ensure_speed_interposer_bound(void) {
+  if (g_speed_rebound || deep_speed_disabled()) return;
+  if (!g_speed_interposer) load_speed_interposer();
+  if (g_speed_rebind_image) {
+    g_speed_rebind_image(g_real_plugin_name);
+    g_speed_rebound = true;
+  }
+}
+
 static bool load_real_plugin(void) {
   if (g_real) return true;
 
@@ -379,6 +383,7 @@ static bool load_real_plugin(void) {
     fprintf(stderr, "[xzspeed-shim] real plugin missing PPAPI exports\n");
     return false;
   }
+  ensure_speed_interposer_bound();
   return true;
 }
 

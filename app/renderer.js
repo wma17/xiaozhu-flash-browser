@@ -778,6 +778,18 @@ function showSpeedMenu(anchor) {
   hint.style.cssText = 'max-width: 220px; padding: 8px 10px; color: var(--text-secondary); font-size: 11px; line-height: 1.4;';
   hint.textContent = i18n.t('speed.safe_hint');
   menu.appendChild(hint);
+  const stateLine = document.createElement('div');
+  stateLine.style.cssText = 'max-width: 240px; padding: 0 10px 8px; color: var(--text-secondary); font-size: 11px; line-height: 1.4;';
+  stateLine.textContent = i18n.t('speed.state')
+    .replace('{factor}', Math.round((speedFactor || 1) * 100) / 100)
+    .replace('{profile}', speedProfileCode());
+  menu.appendChild(stateLine);
+  ipcRenderer.invoke('speed:state').then((state) => {
+    if (!state || !document.body.contains(stateLine)) return;
+    stateLine.textContent = i18n.t('speed.state')
+      .replace('{factor}', Math.round((state.factor || 1) * 100) / 100)
+      .replace('{profile}', state.profile || 0);
+  }).catch(() => {});
   document.body.appendChild(menu);
   armMenuClose();
 }

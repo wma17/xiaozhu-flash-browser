@@ -66,6 +66,18 @@ function readSpeedFactor() {
     catch (_e) { return 1; }
   }
 }
+function readSpeedState() {
+  try {
+    const parts = String(fs.readFileSync(SPEED_FILE, 'utf8')).trim().split(/\s+/);
+    return {
+      factor: clampSpeedFactor(parts[0]),
+      profile: clampSpeedProfile(parts[1]),
+      raw: parts.join(' '),
+    };
+  } catch (e) {
+    return { factor: 1, profile: 0, raw: '' };
+  }
+}
 function publishSpeedFactor(value, profile = 0) {
   const speed = Math.round(clampSpeedFactor(value) * 1000);
   const mode = clampSpeedProfile(profile);
@@ -170,6 +182,7 @@ ipcMain.handle('window:open-many', (_e, url, profileIds) => {
   return true;
 });
 ipcMain.handle('speed:get', () => readSpeedFactor());
+ipcMain.handle('speed:state', () => readSpeedState());
 ipcMain.handle('speed:hook-enabled', () => speedMode);
 ipcMain.handle('speed:set', (_e, factor, profile) => {
   const next = writeSpeedState(factor, profile);
@@ -339,7 +352,7 @@ app.on('activate', () => {
 
 app.on('ready', function() {
   seedDefaults();
-  writeSpeedFactor(readSpeedFactor());
+  writeSpeedState(readSpeedFactor(), 0);
   // Defer reminder scheduling so the window paints first.
   setTimeout(scheduleAllTasks, 200);
   const template = [

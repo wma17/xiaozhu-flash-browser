@@ -200,6 +200,7 @@ const dicts = {
     'speed.mode_native_wall_short': 'Wall',
     'speed.mode_native_all_short': 'Native',
     'speed.mode_native_all_schedule_short': 'Strict',
+    'speed.state': 'State: {factor}x / mode {profile}',
     'speed.auto_mute': 'Mute while sped up',
 
     'set.show_quick_note': 'Show Quick-Note button on game pages',
@@ -456,6 +457,7 @@ const dicts = {
     'speed.mode_native_wall_short': '墙时',
     'speed.mode_native_all_short': '原生',
     'speed.mode_native_all_schedule_short': '严格',
+    'speed.state': '状态：{factor}x / {profile}档',
     'speed.auto_mute': '变速时静音',
 
     'set.show_quick_note': '在游戏页面显示快速便签按钮',
