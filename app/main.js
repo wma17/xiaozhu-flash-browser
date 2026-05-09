@@ -48,20 +48,21 @@ function clampSpeedProfile(value) {
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(7, Math.round(n)));
 }
-function writeSpeedFactor(value) {
+function writeSpeedState(value, profile = 0) {
   const factor = clampSpeedFactor(value);
+  const mode = clampSpeedProfile(profile);
   try {
-    fs.writeFileSync(SPEED_FILE, String(factor), 'utf8');
-    return factor;
+    fs.writeFileSync(SPEED_FILE, factor + ' ' + mode, 'utf8');
+    return { factor, mode };
   } catch (e) {
-    dlog('speed write failed: ' + (e && e.stack || e));
-    return 1;
+    dlog('speed state write failed: ' + (e && e.stack || e));
+    return { factor: 1, mode: 0 };
   }
 }
 function readSpeedFactor() {
-  try { return clampSpeedFactor(fs.readFileSync(SPEED_FILE, 'utf8')); }
+  try { return clampSpeedFactor(String(fs.readFileSync(SPEED_FILE, 'utf8')).trim().split(/\s+/)[0]); }
   catch (e) {
-    try { return clampSpeedFactor(fs.readFileSync(LEGACY_SPEED_FILE, 'utf8')); }
+    try { return clampSpeedFactor(String(fs.readFileSync(LEGACY_SPEED_FILE, 'utf8')).trim().split(/\s+/)[0]); }
     catch (_e) { return 1; }
   }
 }
@@ -78,7 +79,7 @@ function firstLaunchUrlArg() {
   return null;
 }
 // Always start at 1x so a previous accelerated session cannot affect login.
-writeSpeedFactor(1);
+writeSpeedState(1, 0);
 process.env.XZFLASH_SPEED_FACTOR = String(readSpeedFactor());
 process.env.XZFLASH_SPEED_PROFILE = '0';
 publishSpeedFactor(1, 0);
@@ -171,12 +172,12 @@ ipcMain.handle('window:open-many', (_e, url, profileIds) => {
 ipcMain.handle('speed:get', () => readSpeedFactor());
 ipcMain.handle('speed:hook-enabled', () => speedMode);
 ipcMain.handle('speed:set', (_e, factor, profile) => {
-  const next = writeSpeedFactor(factor);
-  process.env.XZFLASH_SPEED_FACTOR = String(next);
-  process.env.XZFLASH_SPEED_PROFILE = String(clampSpeedProfile(profile));
-  publishSpeedFactor(next, profile);
-  broadcast('speed:changed', next);
-  return next;
+  const next = writeSpeedState(factor, profile);
+  process.env.XZFLASH_SPEED_FACTOR = String(next.factor);
+  process.env.XZFLASH_SPEED_PROFILE = String(next.mode);
+  publishSpeedFactor(next.factor, next.mode);
+  broadcast('speed:changed', next.factor);
+  return next.factor;
 });
 ipcMain.handle('speed:relaunch', (_e, enable, currentUrl) => {
   const args = process.argv.slice(1).filter(a =>

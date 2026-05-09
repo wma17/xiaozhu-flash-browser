@@ -269,9 +269,11 @@ static void maybe_refresh_speed_locked(void) {
     return;
   }
   double next = 1.0;
-  int ok = fscanf(f, "%lf", &next);
+  int profile = g_speed_profile;
+  int ok = fscanf(f, "%lf %d", &next, &profile);
   fclose(f);
   if (ok != 1) return;
+  if (ok >= 2 && profile >= 0 && profile <= SPEED_PROFILE_MAX) g_speed_profile = profile;
   apply_speed_locked(next);
 }
 
