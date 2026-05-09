@@ -231,6 +231,7 @@ static void maybe_refresh_speed_locked(void) {
   apply_speed_locked(next);
 }
 
+#if 0
 static double current_speed(void) {
   double out;
   pthread_mutex_lock(&g_lock);
@@ -255,6 +256,7 @@ static int64_t scale_i64_interval(int64_t value, double speed) {
   if (scaled > (double)INT64_MAX) return INT64_MAX;
   return (int64_t)scaled;
 }
+#endif
 
 __attribute__((constructor))
 static void xzspeed_init(void) {
@@ -349,6 +351,7 @@ static CFAbsoluteTime my_CFAbsoluteTimeGetCurrent(void) {
   return out;
 }
 
+#if 0
 static dispatch_time_t my_dispatch_time(dispatch_time_t when, int64_t delta) {
   if (!g_active || delta <= 0) return dispatch_time(when, delta);
   return dispatch_time(when, scale_i64_interval(delta, current_speed()));
@@ -408,6 +411,7 @@ static int my_pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mute
   struct timespec scaled = sec_to_ts(ts_to_sec(now) + delay / speed);
   return pthread_cond_timedwait(cond, mutex, &scaled);
 }
+#endif
 
 typedef struct SymbolRebinding {
   const char *name;
@@ -420,15 +424,6 @@ static const SymbolRebinding kRebindings[] = {
   { "gettimeofday", (void *)my_gettimeofday },
   { "time", (void *)my_time },
   { "CFAbsoluteTimeGetCurrent", (void *)my_CFAbsoluteTimeGetCurrent },
-  { "dispatch_time", (void *)my_dispatch_time },
-  { "dispatch_source_set_timer", (void *)my_dispatch_source_set_timer },
-  { "pthread_cond_timedwait_relative_np", (void *)my_pthread_cond_timedwait_relative_np },
-  { "pthread_cond_timedwait", (void *)my_pthread_cond_timedwait },
-  { "nanosleep", (void *)my_nanosleep },
-  { "usleep", (void *)my_usleep },
-  { "poll", (void *)my_poll },
-  { "select", (void *)my_select },
-  { "select$1050", (void *)my_select },
 };
 
 static void *replacement_for_symbol(const char *symbol) {
@@ -539,12 +534,4 @@ __attribute__((used)) static struct {
   { (const void *)my_gettimeofday, (const void *)gettimeofday },
   { (const void *)my_time, (const void *)time },
   { (const void *)my_CFAbsoluteTimeGetCurrent, (const void *)CFAbsoluteTimeGetCurrent },
-  { (const void *)my_dispatch_time, (const void *)dispatch_time },
-  { (const void *)my_dispatch_source_set_timer, (const void *)dispatch_source_set_timer },
-  { (const void *)my_pthread_cond_timedwait_relative_np, (const void *)pthread_cond_timedwait_relative_np },
-  { (const void *)my_pthread_cond_timedwait, (const void *)pthread_cond_timedwait },
-  { (const void *)my_nanosleep, (const void *)nanosleep },
-  { (const void *)my_usleep, (const void *)usleep },
-  { (const void *)my_poll, (const void *)poll },
-  { (const void *)my_select, (const void *)select },
 };
