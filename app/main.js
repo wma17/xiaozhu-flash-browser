@@ -15,9 +15,7 @@ process.on('unhandledRejection', (err) => dlog('UNHANDLED: ' + (err && err.stack
 
 const homeUrl = configuration.appUrl || 'https://www.4399.com/';
 const resizable = configuration.resizable !== false;
-const speedMode = process.platform === 'darwin'
-  ? !process.argv.includes('--xz-no-speed-mode') && process.env.XZFLASH_DISABLE_SPEED_HOOK !== '1'
-  : (process.argv.includes('--xz-speed-mode') || process.env.XZFLASH_ENABLE_SPEED_HOOK === '1');
+const speedMode = process.argv.includes('--xz-speed-mode') || process.env.XZFLASH_ENABLE_SPEED_HOOK === '1';
 const initialLaunchUrl = firstLaunchUrlArg();
 
 const windows = new Set();
@@ -29,10 +27,16 @@ app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,BackForwardCache');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+app.commandLine.appendSwitch('ignore-gpu-blocklist');
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
+app.commandLine.appendSwitch('disk-cache-size', String(256 * 1024 * 1024));
+app.commandLine.appendSwitch('media-cache-size', String(128 * 1024 * 1024));
 
-// --- Flash speed engine ---
-// macOS launches use a PPAPI proxy plugin at 1x by default. That keeps the
-// live speed controls available without reloading into a separate mode.
+// --- Sealed Flash speed experiment ---
+// The experimental speed engine is kept for future research but is disabled
+// in normal launches. Use --xz-speed-mode or XZFLASH_ENABLE_SPEED_HOOK=1 only
+// when intentionally testing it.
 const LEGACY_SPEED_FILE = path.join(os.homedir(), '.xzflash-speed');
 const SPEED_FILE = path.join(os.tmpdir(), 'xzflash-speed-' + (process.getuid ? process.getuid() : 'user'));
 const SPEED_NOTIFY_NAME = 'com.xiaozhu.flash.speed.' + (process.getuid ? process.getuid() : 'user');
@@ -79,6 +83,7 @@ function readSpeedState() {
   }
 }
 function publishSpeedFactor(value, profile = 0) {
+  if (!speedMode) return;
   const speed = Math.round(clampSpeedFactor(value) * 1000);
   const mode = clampSpeedProfile(profile);
   const state = String((mode + 1) * 1000000 + speed);

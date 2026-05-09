@@ -15,6 +15,10 @@ rsync -a --delete \
   --exclude='plugins/PepperFlashPlayerSpeed.plugin' \
   "$ROOT/app/" "$APP_RESOURCES/"
 
-"$ROOT/scripts/build-speed-shim.sh"
+if [[ "${BUILD_SPEED_SHIM:-0}" == "1" ]]; then
+  "$ROOT/scripts/build-speed-shim.sh"
+else
+  rm -rf "$APP_RESOURCES/plugins/PepperFlashPlayerSpeed.plugin"
+fi
 codesign --force --deep --sign - "$APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"

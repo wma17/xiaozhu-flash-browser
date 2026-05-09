@@ -156,7 +156,18 @@ function ensureProfiles() {
 function makeProfile(name) {
   const colors = ['#F4A23C', '#C86B2A', '#8B4E2A', '#5B4636', '#E09F3E', '#9E6240', '#4C7A5A', '#486F9E'];
   const id = 'p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-  return { id, name: name.trim(), color: colors[profiles.length % colors.length], persistent: true, createdAt: Date.now() };
+  const cleanName = String(name || '').trim() || nextProfileName();
+  return { id, name: cleanName, color: colors[profiles.length % colors.length], persistent: true, createdAt: Date.now() };
+}
+function nextProfileName() {
+  const base = i18n.t('prof.new_profile') || 'Profile';
+  const used = new Set(profiles.map(p => p.name));
+  if (!used.has(base)) return base;
+  for (let n = 2; n < 1000; n++) {
+    const candidate = base + ' ' + n;
+    if (!used.has(candidate)) return candidate;
+  }
+  return base + ' ' + Date.now().toString(36).slice(-4);
 }
 
 // ---------- i18n ----------
@@ -677,6 +688,8 @@ window.addEventListener('resize', () => {
 function updateSpeedIndicator() {
   const el = $('speed-indicator');
   if (!el) return;
+  el.classList.toggle('sealed', !speedHookEnabled);
+  if (!speedHookEnabled) return;
   const rounded = Math.round((speedFactor || 1) * 100) / 100;
   const profile = SPEED_PROFILE_BY_KEY[settings.speedProfile] || SPEED_PROFILES[0];
   const modeText = i18n.t(profile.shortKey);
@@ -1023,10 +1036,16 @@ async function renderProfiles() {
   }
 }
 $('profile-create-btn').addEventListener('click', async () => {
-  const name = prompt(i18n.t('prof.new_profile') + ':', i18n.t('prof.new_profile'));
-  if (!name || !name.trim()) return;
-  profiles.push(makeProfile(name));
+  ensureProfiles();
+  const profile = makeProfile(nextProfileName());
+  profiles.push(profile);
   await saveProfiles();
+  if (!settings.defaultProfileId) {
+    settings.defaultProfileId = profile.id;
+    await saveSettings();
+  }
+  refreshProfileChip();
+  updateCounts();
   renderProfiles();
 });
 

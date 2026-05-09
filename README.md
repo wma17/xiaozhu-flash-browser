@@ -3,8 +3,8 @@
 小竹Flash浏览器是一个面向 macOS 经典 Flash 网页游戏的 Electron 浏览器壳，重点是：
 
 - 独立档案：每个档案隔离 Cookie、localStorage 和缓存，适合小号多开。
-- Flash 游戏优化：保留 PPAPI Flash 支持，默认关闭破坏性注入。
-- 实验变速：普通模式稳定优先；实验模式通过 PPAPI 代理插件包装 `PPB_Core` 时间接口。
+- Flash 游戏优化：保留 PPAPI Flash 支持，普通模式只加载原始 PepperFlash 插件。
+- 实验变速已封印：相关源码和研究记录保留，但普通启动不构建、不加载、不显示变速入口。
 - 游戏模式：压缩浏览器 UI，把更多屏幕空间留给游戏。
 - 账号辅助：检测登录表单、保存账号密码、同站点多账号选择填充。
 
@@ -16,7 +16,8 @@
 - `app/ppapi_speed_shim.c`：实验变速的 PPAPI 代理插件源码。
 - `app/xzspeed.c`：旧的 DYLD interpose 实验源码，保留供研究，不默认使用。
 - `scripts/sync-to-app.sh`：把 `app/` 同步到本机应用包并重新签名。
-- `scripts/build-speed-shim.sh`：构建实验变速代理插件。
+- `scripts/build-speed-shim.sh`：构建已封印的实验变速代理插件，仅供后续研究。
+- `docs/speed-research.md`：变速研究记录、失败现象和后续方向。
 
 ## 本机开发
 
@@ -25,10 +26,11 @@ scripts/sync-to-app.sh
 open -n /Applications/小竹Flash浏览器.app
 ```
 
-实验变速模式：
+普通同步不会构建实验变速插件。若以后继续研究，需要显式打开：
 
 ```bash
-/Applications/小竹Flash浏览器.app/Contents/MacOS/小竹Flash浏览器 --xz-speed-mode
+BUILD_SPEED_SHIM=1 scripts/sync-to-app.sh
+open -n /Applications/小竹Flash浏览器.app --args --xz-speed-mode
 ```
 
 普通启动不会启用实验变速，确保 4399 等 Flash 游戏优先稳定加载。
