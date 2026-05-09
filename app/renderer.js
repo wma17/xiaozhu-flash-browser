@@ -221,6 +221,7 @@ function createTab(url) {
   const tab = {
     id, title: 'Loading…', url: url || homeUrl,
     loading: false, zoom: 1, fit: false,
+    ready: false,
     profileId: profile ? profile.id : null,
     currentHost: null,
   };
@@ -273,7 +274,11 @@ function createTab(url) {
 
   wv.addEventListener('did-start-loading', () => { tab.loading = true; stripEl.classList.add('loading'); if (id === activeId) updateNavButtons(); });
   wv.addEventListener('did-stop-loading', () => { tab.loading = false; stripEl.classList.remove('loading'); if (id === activeId) updateNavButtons(); });
-  wv.addEventListener('dom-ready', applyZoom);
+  wv.addEventListener('dom-ready', () => {
+    tab.ready = true;
+    applyZoom();
+    if (id === activeId) updateNavButtons();
+  });
   wv.addEventListener('page-title-updated', (e) => {
     tab.title = e.title || hostOf(tab.url);
     stripEl.querySelector('.t-title').textContent = tab.title;
@@ -393,8 +398,12 @@ function openUrl(url) {
 // ---------- top bar ----------
 function updateNavButtons() {
   const t = activeTab();
-  const canBack = t && currentRoute === 'browser' && t.webview.canGoBack && t.webview.canGoBack();
-  const canFwd  = t && currentRoute === 'browser' && t.webview.canGoForward && t.webview.canGoForward();
+  let canBack = false;
+  let canFwd = false;
+  if (t && t.ready && currentRoute === 'browser') {
+    try { canBack = !!(t.webview.canGoBack && t.webview.canGoBack()); } catch (e) {}
+    try { canFwd = !!(t.webview.canGoForward && t.webview.canGoForward()); } catch (e) {}
+  }
   $back.classList.toggle('disabled', !canBack);
   $forward.classList.toggle('disabled', !canFwd);
 }
@@ -484,9 +493,17 @@ function refreshProfileChip() {
   $('profile-chip-name').textContent = p.name;
 }
 
-$back.addEventListener('click', () => { const t = activeTab(); if (t && t.webview.canGoBack()) t.webview.goBack(); });
-$forward.addEventListener('click', () => { const t = activeTab(); if (t && t.webview.canGoForward()) t.webview.goForward(); });
-$reload.addEventListener('click', () => { const t = activeTab(); if (t) t.webview.reload(); });
+$back.addEventListener('click', () => {
+  const t = activeTab();
+  if (!t || !t.ready) return;
+  try { if (t.webview.canGoBack()) t.webview.goBack(); } catch (e) {}
+});
+$forward.addEventListener('click', () => {
+  const t = activeTab();
+  if (!t || !t.ready) return;
+  try { if (t.webview.canGoForward()) t.webview.goForward(); } catch (e) {}
+});
+$reload.addEventListener('click', () => { const t = activeTab(); if (t && t.ready) { try { t.webview.reload(); } catch (e) {} } });
 $('go-home').addEventListener('click', () => setRoute('home'));
 $('new-tab-btn').addEventListener('click', () => createTab(homeUrl));
 
@@ -618,6 +635,10 @@ async function setSpeedFactor(factor) {
   const next = await ipcRenderer.invoke('speed:set', factor);
   speedFactor = next || 1;
   updateSpeedIndicator();
+  if (speedHookEnabled) {
+    const t = activeTab();
+    ipcRenderer.invoke('speed:relaunch', true, t ? t.url : null);
+  }
 }
 function showSpeedMenu(anchor) {
   closeAnyMenus();
@@ -637,7 +658,8 @@ function showSpeedMenu(anchor) {
     item.textContent = i18n.t('speed.enable_experimental');
     item.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      ipcRenderer.invoke('speed:relaunch', true);
+      const t = activeTab();
+      ipcRenderer.invoke('speed:relaunch', true, t ? t.url : null);
     });
     menu.appendChild(item);
     document.body.appendChild(menu);
@@ -649,7 +671,8 @@ function showSpeedMenu(anchor) {
   offItem.textContent = i18n.t('speed.disable_experimental');
   offItem.addEventListener('click', (ev) => {
     ev.stopPropagation();
-    ipcRenderer.invoke('speed:relaunch', false);
+    const t = activeTab();
+    ipcRenderer.invoke('speed:relaunch', false, t ? t.url : null);
   });
   menu.appendChild(offItem);
   const topDiv = document.createElement('div');

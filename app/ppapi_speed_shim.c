@@ -1,5 +1,6 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <mach-o/dyld.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -37,6 +38,7 @@ typedef void (*PPP_ShutdownModule_Fn)(void);
 typedef const void *(*PPP_GetInterface_Fn)(const char *interface_name);
 
 static void *g_real = NULL;
+static void *g_speed_interposer = NULL;
 static PPP_InitializeModule_Fn g_real_init = NULL;
 static PPP_ShutdownModule_Fn g_real_shutdown = NULL;
 static PPP_GetInterface_Fn g_real_get_interface = NULL;
@@ -51,6 +53,8 @@ static PP_Time g_time_real_anchor = 0;
 static PP_Time g_time_virtual_anchor = 0;
 static PP_TimeTicks g_ticks_real_anchor = 0;
 static PP_TimeTicks g_ticks_virtual_anchor = 0;
+static bool g_logged_speed_stat_error = false;
+static bool g_logged_speed_open_error = false;
 
 static double clamp_speed(double value) {
   if (!(value > 0.0)) return 1.0;
@@ -59,27 +63,20 @@ static double clamp_speed(double value) {
   return value;
 }
 
-static void refresh_speed(void) {
-  if (!g_speed_file[0]) {
-    const char *home = getenv("HOME");
-    if (!home || !*home) home = "/tmp";
-    snprintf(g_speed_file, sizeof(g_speed_file), "%s/.xzflash-speed", home);
-  }
+static bool speed_from_env(double *out) {
+  const char *value = getenv("XZFLASH_SPEED_FACTOR");
+  if (!value || !*value) return false;
+  char *end = NULL;
+  double parsed = strtod(value, &end);
+  if (end == value) return false;
+  *out = clamp_speed(parsed);
+  return true;
+}
 
-  struct stat st;
-  if (stat(g_speed_file, &st) != 0) return;
-  if (st.st_mtime == g_speed_mtime) return;
-  g_speed_mtime = st.st_mtime;
-
-  FILE *f = fopen(g_speed_file, "r");
-  if (!f) return;
-  double next = 1.0;
-  int ok = fscanf(f, "%lf", &next);
-  fclose(f);
-  if (ok != 1) return;
+static void apply_speed(double next) {
   next = clamp_speed(next);
-
   if (g_real_core && next != g_speed) {
+    fprintf(stderr, "[xzspeed-shim] speed changed %0.2f -> %0.2f\n", g_speed, next);
     if (g_real_core->GetTime) {
       PP_Time now = g_real_core->GetTime();
       g_time_virtual_anchor = g_time_virtual_anchor + (now - g_time_real_anchor) * g_speed;
@@ -92,6 +89,52 @@ static void refresh_speed(void) {
     }
   }
   g_speed = next;
+}
+
+static void refresh_speed(void) {
+  if (!g_speed_file[0]) {
+    const char *configured = getenv("XZFLASH_SPEED_FILE");
+    if (configured && *configured) {
+      snprintf(g_speed_file, sizeof(g_speed_file), "%s", configured);
+    } else {
+      snprintf(g_speed_file, sizeof(g_speed_file), "/tmp/xzflash-speed-%d", getuid());
+    }
+  }
+
+  struct stat st;
+  if (stat(g_speed_file, &st) != 0) {
+    double next = 1.0;
+    if (speed_from_env(&next)) {
+      apply_speed(next);
+      return;
+    }
+    if (!g_logged_speed_stat_error) {
+      fprintf(stderr, "[xzspeed-shim] cannot stat speed file %s: %s\n", g_speed_file, strerror(errno));
+      g_logged_speed_stat_error = true;
+    }
+    return;
+  }
+  if (st.st_mtime == g_speed_mtime) return;
+  g_speed_mtime = st.st_mtime;
+
+  FILE *f = fopen(g_speed_file, "r");
+  if (!f) {
+    double next = 1.0;
+    if (speed_from_env(&next)) {
+      apply_speed(next);
+      return;
+    }
+    if (!g_logged_speed_open_error) {
+      fprintf(stderr, "[xzspeed-shim] cannot open speed file %s: %s\n", g_speed_file, strerror(errno));
+      g_logged_speed_open_error = true;
+    }
+    return;
+  }
+  double next = 1.0;
+  int ok = fscanf(f, "%lf", &next);
+  fclose(f);
+  if (ok != 1) return;
+  apply_speed(next);
 }
 
 static PP_Time shim_GetTime(void) {
@@ -143,8 +186,27 @@ static const void *shim_get_browser(const char *interface_name) {
   return iface;
 }
 
+static void load_speed_interposer(void) {
+  if (g_speed_interposer) return;
+  char dir[4096];
+  Dl_info info;
+  if (!dladdr((void *)&load_speed_interposer, &info) || !info.dli_fname) return;
+  snprintf(dir, sizeof(dir), "%s", info.dli_fname);
+  char *slash = strrchr(dir, '/');
+  if (!slash) return;
+  strcpy(slash + 1, "libxzspeed.dylib");
+  g_speed_interposer = dlopen(dir, RTLD_NOW | RTLD_GLOBAL);
+  if (!g_speed_interposer) {
+    fprintf(stderr, "[xzspeed-shim] speed interposer unavailable: %s\n", dlerror());
+  } else {
+    fprintf(stderr, "[xzspeed-shim] speed interposer loaded\n");
+  }
+}
+
 static bool load_real_plugin(void) {
   if (g_real) return true;
+  load_speed_interposer();
+
   Dl_info info;
   if (!dladdr((void *)&load_real_plugin, &info) || !info.dli_fname) return false;
   char path[4096];

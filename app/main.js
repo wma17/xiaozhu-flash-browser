@@ -1,6 +1,7 @@
 const { app, BrowserWindow, globalShortcut, session, ipcMain, Menu, screen, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const configuration = require('./config.json');
 
 // Minimal crash log so silent failures are diagnosable.
@@ -14,6 +15,7 @@ process.on('unhandledRejection', (err) => dlog('UNHANDLED: ' + (err && err.stack
 const homeUrl = configuration.appUrl || 'https://www.4399.com/';
 const resizable = configuration.resizable !== false;
 const speedMode = process.argv.includes('--xz-speed-mode') || process.env.XZFLASH_ENABLE_SPEED_HOOK === '1';
+const initialLaunchUrl = firstLaunchUrlArg();
 
 const windows = new Set();
 const pendingInit = new WeakMap();
@@ -28,7 +30,9 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // --- Flash speed engine ---
 // Normal launches use the original Pepper Flash plugin. Speed mode uses a PPAPI
 // proxy plugin that wraps PPB_Core time callbacks; no DYLD injection is used.
-const SPEED_FILE = path.join(require('os').homedir(), '.xzflash-speed');
+const LEGACY_SPEED_FILE = path.join(os.homedir(), '.xzflash-speed');
+const SPEED_FILE = path.join(os.tmpdir(), 'xzflash-speed-' + (process.getuid ? process.getuid() : 'user'));
+process.env.XZFLASH_SPEED_FILE = SPEED_FILE;
 function clampSpeedFactor(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 1;
@@ -46,12 +50,22 @@ function writeSpeedFactor(value) {
 }
 function readSpeedFactor() {
   try { return clampSpeedFactor(fs.readFileSync(SPEED_FILE, 'utf8')); }
-  catch (e) { return 1; }
+  catch (e) {
+    try { return clampSpeedFactor(fs.readFileSync(LEGACY_SPEED_FILE, 'utf8')); }
+    catch (_e) { return 1; }
+  }
+}
+function firstLaunchUrlArg() {
+  for (const arg of process.argv.slice(1)) {
+    if (/^(https?|file):\/\//i.test(arg)) return arg;
+  }
+  return null;
 }
 // Disabled by default: the previous DYLD injection path can prevent Pepper Flash
 // from loading on some games. Keep the speed factor plumbing/UI available, but
 // do not inject until the hook is proven safe in a separate test build.
 if (!fs.existsSync(SPEED_FILE)) writeSpeedFactor(1);
+process.env.XZFLASH_SPEED_FACTOR = String(readSpeedFactor());
 
 // --- Flash plugin ---
 let pluginName, pluginVersion;
@@ -142,9 +156,10 @@ ipcMain.handle('speed:set', (_e, factor) => {
   broadcast('speed:changed', next);
   return next;
 });
-ipcMain.handle('speed:relaunch', (_e, enable) => {
-  const args = process.argv.slice(1).filter(a => a !== '--xz-speed-mode');
+ipcMain.handle('speed:relaunch', (_e, enable, currentUrl) => {
+  const args = process.argv.slice(1).filter(a => a !== '--xz-speed-mode' && !/^(https?|file):\/\//i.test(a));
   if (enable) args.push('--xz-speed-mode');
+  if (currentUrl && /^(https?|file):\/\//i.test(currentUrl)) args.push(currentUrl);
   app.relaunch({ args });
   app.exit(0);
 });
@@ -338,7 +353,7 @@ app.on('ready', function() {
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 
-  try { createBrowserWindowWithUrl(); }
+  try { createBrowserWindowWithUrl(initialLaunchUrl); }
   catch (e) { dlog('createWin THREW: ' + (e && e.stack || e)); }
 
   globalShortcut.register('F5', () => sendToFocused('action', 'reload'));

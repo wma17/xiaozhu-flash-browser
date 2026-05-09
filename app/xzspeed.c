@@ -34,12 +34,35 @@ static time_t g_time_real_anchor = 0;
 static time_t g_time_virt_anchor = 0;
 static CFAbsoluteTime g_cf_real_anchor = 0;
 static CFAbsoluteTime g_cf_virt_anchor = 0;
+static bool g_logged_speed_stat_error = false;
+static bool g_logged_speed_open_error = false;
+
+static void rebase_locked(void);
 
 static double clamp_speed(double s) {
   if (!(s > 0.0)) return 1.0;
   if (s < 0.5) return 0.5;
   if (s > 10.0) return 10.0;
   return s;
+}
+
+static bool speed_from_env(double *out) {
+  const char *value = getenv("XZFLASH_SPEED_FACTOR");
+  if (!value || !*value) return false;
+  char *end = NULL;
+  double parsed = strtod(value, &end);
+  if (end == value) return false;
+  *out = clamp_speed(parsed);
+  return true;
+}
+
+static void apply_speed_locked(double next) {
+  next = clamp_speed(next);
+  if (next != g_speed) {
+    fprintf(stderr, "[xzspeed] speed changed %0.2f -> %0.2f\n", g_speed, next);
+    rebase_locked();
+    g_speed = next;
+  }
 }
 
 static double ts_to_sec(struct timespec t) {
@@ -126,6 +149,15 @@ static void maybe_refresh_speed_locked(void) {
 
   struct stat st;
   if (stat(g_speed_file, &st) != 0) {
+    double env_speed = 1.0;
+    if (speed_from_env(&env_speed)) {
+      apply_speed_locked(env_speed);
+      return;
+    }
+    if (!g_logged_speed_stat_error) {
+      fprintf(stderr, "[xzspeed] cannot stat speed file %s: %s\n", g_speed_file, strerror(errno));
+      g_logged_speed_stat_error = true;
+    }
     if (g_speed != 1.0) {
       rebase_locked();
       g_speed = 1.0;
@@ -139,16 +171,23 @@ static void maybe_refresh_speed_locked(void) {
   }
   g_speed_stat = st;
   FILE *f = fopen(g_speed_file, "r");
-  if (!f) return;
+  if (!f) {
+    double env_speed = 1.0;
+    if (speed_from_env(&env_speed)) {
+      apply_speed_locked(env_speed);
+      return;
+    }
+    if (!g_logged_speed_open_error) {
+      fprintf(stderr, "[xzspeed] cannot open speed file %s: %s\n", g_speed_file, strerror(errno));
+      g_logged_speed_open_error = true;
+    }
+    return;
+  }
   double next = 1.0;
   int ok = fscanf(f, "%lf", &next);
   fclose(f);
   if (ok != 1) return;
-  next = clamp_speed(next);
-  if (next != g_speed) {
-    rebase_locked();
-    g_speed = next;
-  }
+  apply_speed_locked(next);
 }
 
 static double current_speed(void) {
@@ -193,9 +232,12 @@ static void xzspeed_init(void) {
   if (!is_ppapi || is_broker) return;
   g_active = true;
 
-  const char *home = getenv("HOME");
-  if (!home || !*home) home = "/tmp";
-  snprintf(g_speed_file, sizeof(g_speed_file), "%s/.xzflash-speed", home);
+  const char *configured = getenv("XZFLASH_SPEED_FILE");
+  if (configured && *configured) {
+    snprintf(g_speed_file, sizeof(g_speed_file), "%s", configured);
+  } else {
+    snprintf(g_speed_file, sizeof(g_speed_file), "/tmp/xzflash-speed-%d", getuid());
+  }
 
   g_mach_real_anchor = mach_absolute_time();
   g_mach_virt_anchor = g_mach_real_anchor;

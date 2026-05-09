@@ -15,7 +15,10 @@ fi
 rm -rf "$DST_PLUGIN"
 cp -R "$SRC_PLUGIN" "$DST_PLUGIN"
 mv "$DST_PLUGIN/Contents/MacOS/PepperFlashPlayer" "$DST_PLUGIN/Contents/MacOS/PepperFlashPlayer.real"
+clang -arch x86_64 -dynamiclib -O2 -Wall -Wextra -framework CoreFoundation \
+  -o "$DST_PLUGIN/Contents/MacOS/libxzspeed.dylib" \
+  "$ROOT/app/xzspeed.c"
 clang -arch x86_64 -bundle -O2 -Wall -Wextra -framework CoreFoundation \
   -o "$DST_PLUGIN/Contents/MacOS/PepperFlashPlayer" \
   "$ROOT/app/ppapi_speed_shim.c"
-chmod +x "$DST_PLUGIN/Contents/MacOS/PepperFlashPlayer" "$DST_PLUGIN/Contents/MacOS/PepperFlashPlayer.real"
+chmod +x "$DST_PLUGIN/Contents/MacOS/PepperFlashPlayer" "$DST_PLUGIN/Contents/MacOS/PepperFlashPlayer.real" "$DST_PLUGIN/Contents/MacOS/libxzspeed.dylib"
