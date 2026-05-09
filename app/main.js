@@ -2,6 +2,7 @@ const { app, BrowserWindow, globalShortcut, session, ipcMain, Menu, screen, Noti
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { execFile } = require('child_process');
 const configuration = require('./config.json');
 
 // Minimal crash log so silent failures are diagnosable.
@@ -32,7 +33,9 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // proxy plugin that wraps PPB_Core time callbacks; no DYLD injection is used.
 const LEGACY_SPEED_FILE = path.join(os.homedir(), '.xzflash-speed');
 const SPEED_FILE = path.join(os.tmpdir(), 'xzflash-speed-' + (process.getuid ? process.getuid() : 'user'));
+const SPEED_NOTIFY_NAME = 'com.xiaozhu.flash.speed.' + (process.getuid ? process.getuid() : 'user');
 process.env.XZFLASH_SPEED_FILE = SPEED_FILE;
+process.env.XZFLASH_SPEED_NOTIFY_NAME = SPEED_NOTIFY_NAME;
 function clampSpeedFactor(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 1;
@@ -55,6 +58,10 @@ function readSpeedFactor() {
     catch (_e) { return 1; }
   }
 }
+function publishSpeedFactor(value) {
+  const state = String(Math.round(clampSpeedFactor(value) * 1000));
+  execFile('/usr/bin/notifyutil', ['-s', SPEED_NOTIFY_NAME, state, '-p', SPEED_NOTIFY_NAME], () => {});
+}
 function firstLaunchUrlArg() {
   for (const arg of process.argv.slice(1)) {
     if (/^(https?|file):\/\//i.test(arg)) return arg;
@@ -66,6 +73,7 @@ function firstLaunchUrlArg() {
 // do not inject until the hook is proven safe in a separate test build.
 if (!fs.existsSync(SPEED_FILE)) writeSpeedFactor(1);
 process.env.XZFLASH_SPEED_FACTOR = String(readSpeedFactor());
+publishSpeedFactor(readSpeedFactor());
 
 // --- Flash plugin ---
 let pluginName, pluginVersion;
@@ -153,6 +161,8 @@ ipcMain.handle('speed:get', () => readSpeedFactor());
 ipcMain.handle('speed:hook-enabled', () => speedMode);
 ipcMain.handle('speed:set', (_e, factor) => {
   const next = writeSpeedFactor(factor);
+  process.env.XZFLASH_SPEED_FACTOR = String(next);
+  publishSpeedFactor(next);
   broadcast('speed:changed', next);
   return next;
 });

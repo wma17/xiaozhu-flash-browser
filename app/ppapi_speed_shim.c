@@ -2,6 +2,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <mach-o/dyld.h>
+#include <notify.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -55,6 +56,8 @@ static PP_TimeTicks g_ticks_real_anchor = 0;
 static PP_TimeTicks g_ticks_virtual_anchor = 0;
 static bool g_logged_speed_stat_error = false;
 static bool g_logged_speed_open_error = false;
+static bool g_notify_ready = false;
+static int g_notify_token = NOTIFY_TOKEN_INVALID;
 
 static double clamp_speed(double value) {
   if (!(value > 0.0)) return 1.0;
@@ -70,6 +73,32 @@ static bool speed_from_env(double *out) {
   double parsed = strtod(value, &end);
   if (end == value) return false;
   *out = clamp_speed(parsed);
+  return true;
+}
+
+static void setup_notify_channel(void) {
+  if (g_notify_ready) return;
+  g_notify_ready = true;
+  const char *name = getenv("XZFLASH_SPEED_NOTIFY_NAME");
+  if (!name || !*name) return;
+  uint32_t status = notify_register_check(name, &g_notify_token);
+  if (status != NOTIFY_STATUS_OK) {
+    fprintf(stderr, "[xzspeed-shim] notify registration failed: %u\n", status);
+    g_notify_token = NOTIFY_TOKEN_INVALID;
+    return;
+  }
+  fprintf(stderr, "[xzspeed-shim] notify channel registered: %s\n", name);
+}
+
+static bool speed_from_notify(double *out) {
+  setup_notify_channel();
+  if (g_notify_token == NOTIFY_TOKEN_INVALID) return false;
+  int changed = 0;
+  notify_check(g_notify_token, &changed);
+  if (!changed) return false;
+  uint64_t state = 0;
+  if (notify_get_state(g_notify_token, &state) != NOTIFY_STATUS_OK || state == 0) return false;
+  *out = clamp_speed((double)state / 1000.0);
   return true;
 }
 
@@ -92,6 +121,12 @@ static void apply_speed(double next) {
 }
 
 static void refresh_speed(void) {
+  double notify_speed = 1.0;
+  if (speed_from_notify(&notify_speed)) {
+    apply_speed(notify_speed);
+    return;
+  }
+
   if (!g_speed_file[0]) {
     const char *configured = getenv("XZFLASH_SPEED_FILE");
     if (configured && *configured) {

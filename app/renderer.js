@@ -635,10 +635,6 @@ async function setSpeedFactor(factor) {
   const next = await ipcRenderer.invoke('speed:set', factor);
   speedFactor = next || 1;
   updateSpeedIndicator();
-  if (speedHookEnabled) {
-    const t = activeTab();
-    ipcRenderer.invoke('speed:relaunch', true, t ? t.url : null);
-  }
 }
 function showSpeedMenu(anchor) {
   closeAnyMenus();
