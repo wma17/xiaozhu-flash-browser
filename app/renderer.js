@@ -15,7 +15,14 @@ let notes = [];
 let tasks = [];
 let activeNoteId = null;
 let notesSaveTimer = null;
-let settings = { language: 'zh-CN', defaultProfileId: 'main', restoreSession: true, sidebarCollapsed: false };
+let settings = {
+  language: 'zh-CN',
+  defaultProfileId: 'main',
+  restoreSession: true,
+  sidebarCollapsed: false,
+  speedProfile: 'safe',
+  speedAutoMute: true,
+};
 let speedFactor = 1;
 let speedHookEnabled = false;
 let currentRoute = 'home';
@@ -258,6 +265,7 @@ function createTab(url) {
   wv.setAttribute('src', tab.url);
   $webviews.appendChild(wv);
   tab.webview = wv;
+  applySpeedAudioMute();
   wv.addEventListener('focus', closeAnyMenus);
 
   const applyZoom = () => {
@@ -421,6 +429,19 @@ function updateZoomIndicator() {
   const pct = Math.round((t.zoom || 1) * 100);
   $zoomInd.textContent = t.fit ? ('⤢ ' + pct + '%') : (pct + '% ▾');
   $zoomInd.title = t.fit ? i18n.t('zoom.auto') : '';
+}
+
+function speedProfileCode() {
+  return settings.speedProfile === 'strong' ? 2 : 1;
+}
+
+function applySpeedAudioMute() {
+  const shouldMute = !!settings.speedAutoMute && speedHookEnabled && Math.abs((speedFactor || 1) - 1) > 0.01;
+  for (const t of tabs) {
+    try {
+      if (t.webview && typeof t.webview.setAudioMuted === 'function') t.webview.setAudioMuted(shouldMute);
+    } catch (e) {}
+  }
 }
 // Clicking the zoom indicator opens a dropdown with preset values + custom + fit.
 $('zoom-indicator').addEventListener('click', (ev) => {
@@ -632,9 +653,10 @@ function updateSpeedIndicator() {
   el.title = speedHookEnabled ? (rounded === 1 ? i18n.t('speed.normal') : i18n.t('speed.tip')) : i18n.t('speed.disabled_hint');
 }
 async function setSpeedFactor(factor) {
-  const next = await ipcRenderer.invoke('speed:set', factor);
+  const next = await ipcRenderer.invoke('speed:set', factor, speedProfileCode());
   speedFactor = next || 1;
   updateSpeedIndicator();
+  applySpeedAudioMute();
 }
 function showSpeedMenu(anchor) {
   closeAnyMenus();
@@ -655,7 +677,7 @@ function showSpeedMenu(anchor) {
     item.addEventListener('click', (ev) => {
       ev.stopPropagation();
       const t = activeTab();
-      ipcRenderer.invoke('speed:set', 1).then(() => {
+      ipcRenderer.invoke('speed:set', 1, speedProfileCode()).then(() => {
         ipcRenderer.invoke('speed:relaunch', true, t ? t.url : null);
       });
     });
@@ -676,6 +698,33 @@ function showSpeedMenu(anchor) {
   const topDiv = document.createElement('div');
   topDiv.style.cssText = 'border-top: 1px solid var(--border); margin: 4px 6px;';
   menu.appendChild(topDiv);
+  const profileItem = document.createElement('div');
+  profileItem.className = 'menu-item';
+  profileItem.textContent = (settings.speedProfile === 'strong')
+      ? i18n.t('speed.profile_strong')
+      : i18n.t('speed.profile_safe');
+  profileItem.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    settings.speedProfile = settings.speedProfile === 'strong' ? 'safe' : 'strong';
+    await saveSettings();
+    setSpeedFactor(speedFactor || 1);
+    closeAnyMenus();
+  });
+  menu.appendChild(profileItem);
+  const muteItem = document.createElement('div');
+  muteItem.className = 'menu-item' + (settings.speedAutoMute ? ' check' : '');
+  muteItem.textContent = i18n.t('speed.auto_mute');
+  muteItem.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    settings.speedAutoMute = !settings.speedAutoMute;
+    await saveSettings();
+    applySpeedAudioMute();
+    closeAnyMenus();
+  });
+  menu.appendChild(muteItem);
+  const modeDiv = document.createElement('div');
+  modeDiv.style.cssText = 'border-top: 1px solid var(--border); margin: 4px 6px;';
+  menu.appendChild(modeDiv);
   const presets = [0.5, 0.8, 1, 1.25, 1.5, 2, 3, 5, 10];
   for (const p of presets) {
     const item = document.createElement('div');
@@ -708,7 +757,11 @@ function showSpeedMenu(anchor) {
   armMenuClose();
 }
 $('speed-indicator').addEventListener('click', (ev) => { ev.stopPropagation(); showSpeedMenu(ev.currentTarget); });
-ipcRenderer.on('speed:changed', (_e, factor) => { speedFactor = factor || 1; updateSpeedIndicator(); });
+ipcRenderer.on('speed:changed', (_e, factor) => {
+  speedFactor = factor || 1;
+  updateSpeedIndicator();
+  applySpeedAudioMute();
+});
 
 // ---------- history ----------
 function recordHistory(tab) {

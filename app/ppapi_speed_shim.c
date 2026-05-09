@@ -117,6 +117,8 @@ static bool speed_from_notify(double *out) {
   if (!changed) return false;
   uint64_t state = 0;
   if (notify_get_state(g_notify_token, &state) != NOTIFY_STATUS_OK || state == 0) return false;
+  if (state >= 1000000) state = state % 1000000;
+  if (state == 0) return false;
   *out = clamp_speed((double)state / 1000.0);
   return true;
 }

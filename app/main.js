@@ -41,6 +41,11 @@ function clampSpeedFactor(value) {
   if (!Number.isFinite(n)) return 1;
   return Math.max(0.5, Math.min(10, n));
 }
+function clampSpeedProfile(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(1, Math.min(2, Math.round(n)));
+}
 function writeSpeedFactor(value) {
   const factor = clampSpeedFactor(value);
   try {
@@ -58,8 +63,10 @@ function readSpeedFactor() {
     catch (_e) { return 1; }
   }
 }
-function publishSpeedFactor(value) {
-  const state = String(Math.round(clampSpeedFactor(value) * 1000));
+function publishSpeedFactor(value, profile = 1) {
+  const speed = Math.round(clampSpeedFactor(value) * 1000);
+  const mode = clampSpeedProfile(profile);
+  const state = String(mode * 1000000 + speed);
   execFile('/usr/bin/notifyutil', ['-s', SPEED_NOTIFY_NAME, state, '-p', SPEED_NOTIFY_NAME], () => {});
 }
 function firstLaunchUrlArg() {
@@ -73,6 +80,7 @@ function firstLaunchUrlArg() {
 // do not inject until the hook is proven safe in a separate test build.
 if (!fs.existsSync(SPEED_FILE)) writeSpeedFactor(1);
 process.env.XZFLASH_SPEED_FACTOR = String(readSpeedFactor());
+process.env.XZFLASH_SPEED_PROFILE = '1';
 publishSpeedFactor(readSpeedFactor());
 
 // --- Flash plugin ---
@@ -117,6 +125,8 @@ function seedDefaults() {
       defaultProfileId: 'main',
       restoreSession: true,
       sidebarCollapsed: false,
+      speedProfile: 'safe',
+      speedAutoMute: true,
     });
   }
   if (!fs.existsSync(storePath('profiles'))) {
@@ -159,10 +169,11 @@ ipcMain.handle('window:open-many', (_e, url, profileIds) => {
 });
 ipcMain.handle('speed:get', () => readSpeedFactor());
 ipcMain.handle('speed:hook-enabled', () => speedMode);
-ipcMain.handle('speed:set', (_e, factor) => {
+ipcMain.handle('speed:set', (_e, factor, profile) => {
   const next = writeSpeedFactor(factor);
   process.env.XZFLASH_SPEED_FACTOR = String(next);
-  publishSpeedFactor(next);
+  process.env.XZFLASH_SPEED_PROFILE = String(clampSpeedProfile(profile));
+  publishSpeedFactor(next, profile);
   broadcast('speed:changed', next);
   return next;
 });

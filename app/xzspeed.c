@@ -27,6 +27,8 @@ static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static bool g_active = false;
 static char g_speed_file[1024];
 static double g_speed = 1.0;
+static int g_speed_profile = 1;
+static int g_applied_speed_profile = 1;
 static double g_last_check_ms = 0.0;
 static struct stat g_speed_stat;
 
@@ -63,6 +65,11 @@ static bool speed_from_env(double *out) {
   double parsed = strtod(value, &end);
   if (end == value) return false;
   *out = clamp_speed(parsed);
+  const char *profile = getenv("XZFLASH_SPEED_PROFILE");
+  if (profile && *profile) {
+    int parsed_profile = atoi(profile);
+    if (parsed_profile >= 1 && parsed_profile <= 2) g_speed_profile = parsed_profile;
+  }
   return true;
 }
 
@@ -87,16 +94,25 @@ static bool speed_from_notify(double *out) {
   notify_check(g_notify_token, &changed);
   uint64_t state = 0;
   if (notify_get_state(g_notify_token, &state) != NOTIFY_STATUS_OK || state == 0) return false;
+  if (state >= 1000000) {
+    uint64_t profile = state / 1000000;
+    uint64_t speed = state % 1000000;
+    if (profile >= 1 && profile <= 2) g_speed_profile = (int)profile;
+    if (speed == 0) return false;
+    *out = clamp_speed((double)speed / 1000.0);
+    return true;
+  }
   *out = clamp_speed((double)state / 1000.0);
   return true;
 }
 
 static void apply_speed_locked(double next) {
   next = clamp_speed(next);
-  if (next != g_speed) {
-    fprintf(stderr, "[xzspeed] speed changed %0.2f -> %0.2f\n", g_speed, next);
+  if (next != g_speed || g_speed_profile != g_applied_speed_profile) {
+    fprintf(stderr, "[xzspeed] speed changed %0.2f -> %0.2f profile=%d\n", g_speed, next, g_speed_profile);
     rebase_locked();
     g_speed = next;
+    g_applied_speed_profile = g_speed_profile;
   }
 }
 
@@ -303,6 +319,7 @@ static void xzspeed_init(void) {
 
 static uint64_t my_mach_absolute_time(void) {
   if (!g_active) return mach_absolute_time();
+  if (g_speed_profile != 2) return mach_absolute_time();
   uint64_t out;
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
@@ -314,6 +331,7 @@ static uint64_t my_mach_absolute_time(void) {
 static int my_clock_gettime(clockid_t clk, struct timespec *tp) {
   if (!g_active || !tp) return clock_gettime(clk, tp);
   if (clk != CLOCK_REALTIME && clk != CLOCK_MONOTONIC) return clock_gettime(clk, tp);
+  if (g_speed_profile != 2 && clk == CLOCK_MONOTONIC) return clock_gettime(clk, tp);
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   *tp = (clk == CLOCK_REALTIME)

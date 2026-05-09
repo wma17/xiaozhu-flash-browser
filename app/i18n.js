@@ -177,6 +177,9 @@ const dicts = {
     'speed.disabled_hint': 'Speed is paused in normal mode to keep Flash loading stable. Experimental mode starts at 1x for safer login.',
     'speed.enable_experimental': 'Relaunch speed mode at 1x',
     'speed.disable_experimental': 'Relaunch normal mode',
+    'speed.profile_safe': 'Mode: safe timing',
+    'speed.profile_strong': 'Mode: strong timing',
+    'speed.auto_mute': 'Mute while sped up',
 
     'set.show_quick_note': 'Show Quick-Note button on game pages',
 
@@ -409,6 +412,9 @@ const dicts = {
     'speed.disabled_hint': '普通模式下暂停变速，保证 Flash 游戏稳定加载。实验模式会先以 1x 进入，登录后再选倍率。',
     'speed.enable_experimental': '以 1x 重启变速模式',
     'speed.disable_experimental': '重启回普通模式',
+    'speed.profile_safe': '模式：稳定时间源',
+    'speed.profile_strong': '模式：强力时间源',
+    'speed.auto_mute': '变速时静音',
 
     'set.show_quick_note': '在游戏页面显示快速便签按钮',
 
