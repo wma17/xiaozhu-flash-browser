@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 typedef int32_t PP_Module;
+typedef int32_t PP_Instance;
 typedef int32_t PP_Resource;
 typedef int32_t PP_Bool;
 typedef double PP_Time;
@@ -34,18 +35,33 @@ typedef struct PPB_Core_1_0 {
   PP_Bool (*IsMainThread)(void);
 } PPB_Core_1_0;
 
+typedef struct PPB_MessageLoop_1_0 {
+  PP_Resource (*Create)(PP_Instance instance);
+  PP_Resource (*GetForMainThread)(void);
+  PP_Resource (*GetCurrent)(void);
+  int32_t (*AttachToCurrentThread)(PP_Resource message_loop);
+  int32_t (*Run)(PP_Resource message_loop);
+  int32_t (*PostWork)(PP_Resource message_loop, PP_CompletionCallback callback, int64_t delay_ms);
+  int32_t (*PostQuit)(PP_Resource message_loop, PP_Bool should_destroy);
+} PPB_MessageLoop_1_0;
+
 typedef int32_t (*PPP_InitializeModule_Fn)(PP_Module module, PPB_GetInterface get_browser);
 typedef void (*PPP_ShutdownModule_Fn)(void);
 typedef const void *(*PPP_GetInterface_Fn)(const char *interface_name);
+typedef void (*XZSpeed_RebindImage_Fn)(const char *name_part);
 
 static void *g_real = NULL;
 static void *g_speed_interposer = NULL;
+static bool g_speed_rebound = false;
+static XZSpeed_RebindImage_Fn g_speed_rebind_image = NULL;
 static PPP_InitializeModule_Fn g_real_init = NULL;
 static PPP_ShutdownModule_Fn g_real_shutdown = NULL;
 static PPP_GetInterface_Fn g_real_get_interface = NULL;
 static PPB_GetInterface g_real_get_browser = NULL;
 static const PPB_Core_1_0 *g_real_core = NULL;
 static PPB_Core_1_0 g_core;
+static const PPB_MessageLoop_1_0 *g_real_message_loop = NULL;
+static PPB_MessageLoop_1_0 g_message_loop;
 
 static char g_speed_file[1024];
 static double g_speed = 1.0;
@@ -56,8 +72,11 @@ static PP_TimeTicks g_ticks_real_anchor = 0;
 static PP_TimeTicks g_ticks_virtual_anchor = 0;
 static bool g_logged_speed_stat_error = false;
 static bool g_logged_speed_open_error = false;
+static char g_real_plugin_name[256] = "PepperFlashPlayer.real";
 static bool g_notify_ready = false;
 static int g_notify_token = NOTIFY_TOKEN_INVALID;
+
+static void load_speed_interposer(void);
 
 static double clamp_speed(double value) {
   if (!(value > 0.0)) return 1.0;
@@ -118,6 +137,15 @@ static void apply_speed(double next) {
     }
   }
   g_speed = next;
+  if (g_speed != 1.0) {
+    if (!g_speed_rebound) {
+      if (!g_speed_interposer) load_speed_interposer();
+      if (g_speed_rebind_image) {
+        g_speed_rebind_image(g_real_plugin_name);
+        g_speed_rebound = true;
+      }
+    }
+  }
 }
 
 static void refresh_speed(void) {
@@ -197,6 +225,45 @@ static void shim_CallOnMainThread(int32_t delay, PP_CompletionCallback callback,
   g_real_core->CallOnMainThread(delay, callback, result);
 }
 
+static PP_Resource shim_MessageLoop_Create(PP_Instance instance) {
+  return g_real_message_loop && g_real_message_loop->Create ? g_real_message_loop->Create(instance) : 0;
+}
+
+static PP_Resource shim_MessageLoop_GetForMainThread(void) {
+  return g_real_message_loop && g_real_message_loop->GetForMainThread ? g_real_message_loop->GetForMainThread() : 0;
+}
+
+static PP_Resource shim_MessageLoop_GetCurrent(void) {
+  return g_real_message_loop && g_real_message_loop->GetCurrent ? g_real_message_loop->GetCurrent() : 0;
+}
+
+static int32_t shim_MessageLoop_AttachToCurrentThread(PP_Resource message_loop) {
+  return g_real_message_loop && g_real_message_loop->AttachToCurrentThread
+      ? g_real_message_loop->AttachToCurrentThread(message_loop)
+      : -2;
+}
+
+static int32_t shim_MessageLoop_Run(PP_Resource message_loop) {
+  return g_real_message_loop && g_real_message_loop->Run ? g_real_message_loop->Run(message_loop) : -2;
+}
+
+static int32_t shim_MessageLoop_PostWork(PP_Resource message_loop, PP_CompletionCallback callback, int64_t delay_ms) {
+  refresh_speed();
+  if (!g_real_message_loop || !g_real_message_loop->PostWork) return -2;
+  if (delay_ms > 0 && g_speed != 1.0) {
+    double scaled = (double)delay_ms / g_speed;
+    if (scaled < 1.0) scaled = 1.0;
+    delay_ms = (int64_t)scaled;
+  }
+  return g_real_message_loop->PostWork(message_loop, callback, delay_ms);
+}
+
+static int32_t shim_MessageLoop_PostQuit(PP_Resource message_loop, PP_Bool should_destroy) {
+  return g_real_message_loop && g_real_message_loop->PostQuit
+      ? g_real_message_loop->PostQuit(message_loop, should_destroy)
+      : -2;
+}
+
 static const void *shim_get_browser(const char *interface_name) {
   const void *iface = g_real_get_browser ? g_real_get_browser(interface_name) : NULL;
   if (!iface || !interface_name) return iface;
@@ -218,17 +285,31 @@ static const void *shim_get_browser(const char *interface_name) {
     fprintf(stderr, "[xzspeed-shim] PPB_Core wrapped, speed=%0.2f\n", g_speed);
     return &g_core;
   }
+  if (strcmp(interface_name, "PPB_MessageLoop;1.0") == 0) {
+    g_real_message_loop = (const PPB_MessageLoop_1_0 *)iface;
+    g_message_loop = *g_real_message_loop;
+    g_message_loop.Create = shim_MessageLoop_Create;
+    g_message_loop.GetForMainThread = shim_MessageLoop_GetForMainThread;
+    g_message_loop.GetCurrent = shim_MessageLoop_GetCurrent;
+    g_message_loop.AttachToCurrentThread = shim_MessageLoop_AttachToCurrentThread;
+    g_message_loop.Run = shim_MessageLoop_Run;
+    g_message_loop.PostWork = shim_MessageLoop_PostWork;
+    g_message_loop.PostQuit = shim_MessageLoop_PostQuit;
+    refresh_speed();
+    fprintf(stderr, "[xzspeed-shim] PPB_MessageLoop wrapped, speed=%0.2f\n", g_speed);
+    return &g_message_loop;
+  }
   return iface;
 }
 
-static bool deep_speed_enabled(void) {
-  const char *enabled = getenv("XZFLASH_DEEP_SPEED_HOOK");
-  return enabled && strcmp(enabled, "1") == 0;
+static bool deep_speed_disabled(void) {
+  const char *disabled = getenv("XZFLASH_DISABLE_DEEP_SPEED_HOOK");
+  return disabled && strcmp(disabled, "1") == 0;
 }
 
 static void load_speed_interposer(void) {
   if (g_speed_interposer) return;
-  if (!deep_speed_enabled()) return;
+  if (deep_speed_disabled()) return;
   char dir[4096];
   Dl_info info;
   if (!dladdr((void *)&load_speed_interposer, &info) || !info.dli_fname) return;
@@ -240,13 +321,13 @@ static void load_speed_interposer(void) {
   if (!g_speed_interposer) {
     fprintf(stderr, "[xzspeed-shim] speed interposer unavailable: %s\n", dlerror());
   } else {
+    g_speed_rebind_image = (XZSpeed_RebindImage_Fn)dlsym(g_speed_interposer, "xzspeed_rebind_image_named");
     fprintf(stderr, "[xzspeed-shim] speed interposer loaded\n");
   }
 }
 
 static bool load_real_plugin(void) {
   if (g_real) return true;
-  load_speed_interposer();
 
   Dl_info info;
   if (!dladdr((void *)&load_real_plugin, &info) || !info.dli_fname) return false;
