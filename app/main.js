@@ -46,7 +46,7 @@ function clampSpeedFactor(value) {
 function clampSpeedProfile(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(2, Math.round(n)));
+  return Math.max(0, Math.min(7, Math.round(n)));
 }
 function writeSpeedFactor(value) {
   const factor = clampSpeedFactor(value);
@@ -68,7 +68,7 @@ function readSpeedFactor() {
 function publishSpeedFactor(value, profile = 0) {
   const speed = Math.round(clampSpeedFactor(value) * 1000);
   const mode = clampSpeedProfile(profile);
-  const state = String(mode * 1000000 + speed);
+  const state = String((mode + 1) * 1000000 + speed);
   execFile('/usr/bin/notifyutil', ['-s', SPEED_NOTIFY_NAME, state, '-p', SPEED_NOTIFY_NAME], () => {});
 }
 function firstLaunchUrlArg() {
@@ -125,8 +125,8 @@ function seedDefaults() {
       defaultProfileId: 'main',
       restoreSession: true,
       sidebarCollapsed: false,
-      speedProfile: 'compatible',
-      speedProfileVersion: 2,
+      speedProfile: 'ppapi-time',
+      speedProfileVersion: 3,
       speedAutoMute: true,
     });
   }

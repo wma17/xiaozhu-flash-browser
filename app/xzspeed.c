@@ -1,4 +1,5 @@
 #include <CoreFoundation/CoreFoundation.h>
+#include <CoreServices/CoreServices.h>
 #include <dispatch/dispatch.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -24,6 +25,7 @@
 #include <crt_externs.h>
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+#define SPEED_PROFILE_MAX 7
 static bool g_active = false;
 static char g_speed_file[1024];
 static double g_speed = 1.0;
@@ -34,6 +36,8 @@ static struct stat g_speed_stat;
 
 static uint64_t g_mach_real_anchor = 0;
 static uint64_t g_mach_virt_anchor = 0;
+static UInt32 g_tick_real_anchor = 0;
+static UInt32 g_tick_virt_anchor = 0;
 static struct timespec g_rt_real_anchor = {0, 0};
 static struct timespec g_rt_virt_anchor = {0, 0};
 static struct timespec g_mono_real_anchor = {0, 0};
@@ -68,7 +72,7 @@ static bool speed_from_env(double *out) {
   const char *profile = getenv("XZFLASH_SPEED_PROFILE");
   if (profile && *profile) {
     int parsed_profile = atoi(profile);
-    if (parsed_profile >= 0 && parsed_profile <= 2) g_speed_profile = parsed_profile;
+    if (parsed_profile >= 0 && parsed_profile <= SPEED_PROFILE_MAX) g_speed_profile = parsed_profile;
   }
   return true;
 }
@@ -97,7 +101,7 @@ static bool speed_from_notify(double *out) {
   if (state >= 1000000) {
     uint64_t profile = state / 1000000;
     uint64_t speed = state % 1000000;
-    if (profile <= 2) g_speed_profile = (int)profile;
+    if (profile > 0 && profile <= SPEED_PROFILE_MAX + 1) g_speed_profile = (int)profile - 1;
     if (speed == 0) return false;
     *out = clamp_speed((double)speed / 1000.0);
     return true;
@@ -178,9 +182,33 @@ static CFAbsoluteTime virtual_cf_value(void) {
   return g_cf_virt_anchor + (now - g_cf_real_anchor) * g_speed;
 }
 
+static UInt32 virtual_tick_value(void) {
+  UInt32 now = TickCount();
+  UInt32 elapsed = now - g_tick_real_anchor;
+  return g_tick_virt_anchor + (UInt32)((double)elapsed * g_speed);
+}
+
+static bool profile_uses_tick(void) {
+  return g_speed_profile == 2 || g_speed_profile == 4 || g_speed_profile >= 6;
+}
+
+static bool profile_uses_mach(void) {
+  return g_speed_profile == 3 || g_speed_profile == 4 || g_speed_profile >= 6;
+}
+
+static bool profile_uses_monotonic_clock(void) {
+  return g_speed_profile == 4 || g_speed_profile >= 6;
+}
+
+static bool profile_uses_wall_clock(void) {
+  return g_speed_profile == 5 || g_speed_profile >= 6;
+}
+
 static void rebase_locked(void) {
   g_mach_virt_anchor = virtual_mach_value();
   g_mach_real_anchor = mach_absolute_time();
+  g_tick_virt_anchor = virtual_tick_value();
+  g_tick_real_anchor = TickCount();
   g_rt_virt_anchor = virtual_ts(g_rt_real_anchor, g_rt_virt_anchor, CLOCK_REALTIME);
   clock_gettime(CLOCK_REALTIME, &g_rt_real_anchor);
   g_mono_virt_anchor = virtual_ts(g_mono_real_anchor, g_mono_virt_anchor, CLOCK_MONOTONIC);
@@ -300,6 +328,8 @@ static void xzspeed_init(void) {
 
   g_mach_real_anchor = mach_absolute_time();
   g_mach_virt_anchor = g_mach_real_anchor;
+  g_tick_real_anchor = TickCount();
+  g_tick_virt_anchor = g_tick_real_anchor;
   clock_gettime(CLOCK_REALTIME, &g_rt_real_anchor);
   g_rt_virt_anchor = g_rt_real_anchor;
   clock_gettime(CLOCK_MONOTONIC, &g_mono_real_anchor);
@@ -319,7 +349,7 @@ static void xzspeed_init(void) {
 
 static uint64_t my_mach_absolute_time(void) {
   if (!g_active) return mach_absolute_time();
-  if (g_speed_profile != 2) return mach_absolute_time();
+  if (!profile_uses_mach()) return mach_absolute_time();
   uint64_t out;
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
@@ -328,10 +358,22 @@ static uint64_t my_mach_absolute_time(void) {
   return out;
 }
 
+static UInt32 my_TickCount(void) {
+  if (!g_active) return TickCount();
+  if (!profile_uses_tick()) return TickCount();
+  UInt32 out;
+  pthread_mutex_lock(&g_lock);
+  maybe_refresh_speed_locked();
+  out = virtual_tick_value();
+  pthread_mutex_unlock(&g_lock);
+  return out;
+}
+
 static int my_clock_gettime(clockid_t clk, struct timespec *tp) {
   if (!g_active || !tp) return clock_gettime(clk, tp);
-  if (g_speed_profile < 2) return clock_gettime(clk, tp);
   if (clk != CLOCK_REALTIME && clk != CLOCK_MONOTONIC) return clock_gettime(clk, tp);
+  if (clk == CLOCK_REALTIME && !profile_uses_wall_clock()) return clock_gettime(clk, tp);
+  if (clk == CLOCK_MONOTONIC && !profile_uses_monotonic_clock()) return clock_gettime(clk, tp);
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   *tp = (clk == CLOCK_REALTIME)
@@ -343,7 +385,7 @@ static int my_clock_gettime(clockid_t clk, struct timespec *tp) {
 
 static int my_gettimeofday(struct timeval *tv, void *tz) {
   if (!g_active || !tv) return gettimeofday(tv, tz);
-  if (g_speed_profile < 2) return gettimeofday(tv, tz);
+  if (!profile_uses_wall_clock()) return gettimeofday(tv, tz);
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   *tv = virtual_tv();
@@ -353,7 +395,7 @@ static int my_gettimeofday(struct timeval *tv, void *tz) {
 
 static time_t my_time(time_t *tloc) {
   if (!g_active) return time(tloc);
-  if (g_speed_profile < 2) return time(tloc);
+  if (!profile_uses_wall_clock()) return time(tloc);
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   time_t out = virtual_time_value();
@@ -364,7 +406,7 @@ static time_t my_time(time_t *tloc) {
 
 static CFAbsoluteTime my_CFAbsoluteTimeGetCurrent(void) {
   if (!g_active) return CFAbsoluteTimeGetCurrent();
-  if (g_speed_profile < 2) return CFAbsoluteTimeGetCurrent();
+  if (!profile_uses_wall_clock()) return CFAbsoluteTimeGetCurrent();
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   CFAbsoluteTime out = virtual_cf_value();
@@ -441,6 +483,7 @@ typedef struct SymbolRebinding {
 
 static const SymbolRebinding kRebindings[] = {
   { "mach_absolute_time", (void *)my_mach_absolute_time },
+  { "TickCount", (void *)my_TickCount },
   { "clock_gettime", (void *)my_clock_gettime },
   { "gettimeofday", (void *)my_gettimeofday },
   { "time", (void *)my_time },
@@ -551,6 +594,7 @@ __attribute__((used)) static struct {
   const void *replacee;
 } interposers[] __attribute__((section("__DATA,__interpose"))) = {
   { (const void *)my_mach_absolute_time, (const void *)mach_absolute_time },
+  { (const void *)my_TickCount, (const void *)TickCount },
   { (const void *)my_clock_gettime, (const void *)clock_gettime },
   { (const void *)my_gettimeofday, (const void *)gettimeofday },
   { (const void *)my_time, (const void *)time },

@@ -15,7 +15,7 @@ fi
 rm -rf "$DST_PLUGIN"
 cp -R "$SRC_PLUGIN" "$DST_PLUGIN"
 mv "$DST_PLUGIN/Contents/MacOS/PepperFlashPlayer" "$DST_PLUGIN/Contents/MacOS/PepperFlashPlayer.real"
-clang -arch x86_64 -dynamiclib -O2 -Wall -Wextra -framework CoreFoundation \
+clang -arch x86_64 -dynamiclib -O2 -Wall -Wextra -Wno-deprecated-declarations -framework CoreFoundation -framework CoreServices \
   -o "$DST_PLUGIN/Contents/MacOS/libxzspeed.dylib" \
   "$ROOT/app/xzspeed.c"
 clang -arch x86_64 -bundle -O2 -Wall -Wextra -framework CoreFoundation \

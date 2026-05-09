@@ -20,8 +20,8 @@ let settings = {
   defaultProfileId: 'main',
   restoreSession: true,
   sidebarCollapsed: false,
-  speedProfile: 'compatible',
-  speedProfileVersion: 2,
+  speedProfile: 'ppapi-time',
+  speedProfileVersion: 3,
   speedAutoMute: true,
 };
 let speedFactor = 1;
@@ -42,6 +42,19 @@ const $zoomInd = $('zoom-indicator');
 const $tabList = $('tab-list');
 const $webviews = $('webviews-container');
 
+const SPEED_PROFILES = [
+  { key: 'ppapi-time', code: 0, labelKey: 'speed.profile_ppapi_time', shortKey: 'speed.mode_ppapi_time_short' },
+  { key: 'ppapi-schedule', code: 1, labelKey: 'speed.profile_ppapi_schedule', shortKey: 'speed.mode_ppapi_schedule_short' },
+  { key: 'native-tick', code: 2, labelKey: 'speed.profile_native_tick', shortKey: 'speed.mode_native_tick_short' },
+  { key: 'native-mach', code: 3, labelKey: 'speed.profile_native_mach', shortKey: 'speed.mode_native_mach_short' },
+  { key: 'native-combo', code: 4, labelKey: 'speed.profile_native_combo', shortKey: 'speed.mode_native_combo_short' },
+  { key: 'native-wall', code: 5, labelKey: 'speed.profile_native_wall', shortKey: 'speed.mode_native_wall_short' },
+  { key: 'native-all', code: 6, labelKey: 'speed.profile_native_all', shortKey: 'speed.mode_native_all_short' },
+  { key: 'native-all-schedule', code: 7, labelKey: 'speed.profile_native_all_schedule', shortKey: 'speed.mode_native_all_schedule_short' },
+];
+const SPEED_PROFILE_KEYS = SPEED_PROFILES.map(p => p.key);
+const SPEED_PROFILE_BY_KEY = SPEED_PROFILES.reduce((acc, p) => { acc[p.key] = p; return acc; }, {});
+
 // ---------- storage ----------
 async function loadStores() {
   const [h, bm, pr, pw, sk, nt, tk, st, hu] = await Promise.all([
@@ -60,13 +73,13 @@ async function loadStores() {
   settings = Object.assign(settings, st || {});
   settings.identity = settings.identity || {};
   let settingsChanged = false;
-  if (!['safe', 'compatible', 'strong'].includes(settings.speedProfile)) {
-    settings.speedProfile = 'compatible';
+  if (!SPEED_PROFILE_KEYS.includes(settings.speedProfile)) {
+    settings.speedProfile = 'ppapi-time';
     settingsChanged = true;
   }
-  if (settings.speedProfileVersion !== 2) {
-    settings.speedProfile = 'compatible';
-    settings.speedProfileVersion = 2;
+  if (settings.speedProfileVersion !== 3) {
+    settings.speedProfile = 'ppapi-time';
+    settings.speedProfileVersion = 3;
     settingsChanged = true;
   }
   if (settings.speedAutoMute == null) {
@@ -448,9 +461,8 @@ function updateZoomIndicator() {
 }
 
 function speedProfileCode() {
-  const profile = settings.speedProfile || 'compatible';
-  if (profile === 'strong') return 2;
-  return profile === 'safe' ? 1 : 0;
+  const profile = SPEED_PROFILE_BY_KEY[settings.speedProfile] || SPEED_PROFILES[0];
+  return profile.code;
 }
 
 function applySpeedAudioMute() {
@@ -666,10 +678,8 @@ function updateSpeedIndicator() {
   const el = $('speed-indicator');
   if (!el) return;
   const rounded = Math.round((speedFactor || 1) * 100) / 100;
-  const profile = settings.speedProfile || 'compatible';
-  const modeText = profile === 'strong'
-      ? i18n.t('speed.mode_strong_short')
-      : (profile === 'compatible' ? i18n.t('speed.mode_compat_short') : i18n.t('speed.mode_safe_short'));
+  const profile = SPEED_PROFILE_BY_KEY[settings.speedProfile] || SPEED_PROFILES[0];
+  const modeText = i18n.t(profile.shortKey);
   el.textContent = speedHookEnabled ? (rounded + 'x ' + modeText + ' ▾') : '1x';
   el.classList.toggle('hot', rounded > 3);
   el.title = speedHookEnabled ? (rounded === 1 ? i18n.t('speed.normal') : i18n.t('speed.tip')) : i18n.t('speed.disabled_hint');
@@ -686,8 +696,8 @@ function showSpeedMenu(anchor) {
   const menu = document.createElement('div');
   menu.className = 'menu';
   menu.style.top = (rect.bottom + 4) + 'px';
-  menu.style.left = (rect.right - 170) + 'px';
-  menu.style.minWidth = '160px';
+  menu.style.left = (rect.right - 260) + 'px';
+  menu.style.minWidth = '250px';
   if (!speedHookEnabled) {
     const hint = document.createElement('div');
     hint.style.cssText = 'max-width: 240px; padding: 10px 12px; color: var(--text-secondary); font-size: 11px; line-height: 1.45;';
@@ -712,18 +722,13 @@ function showSpeedMenu(anchor) {
   modeTitle.style.cssText = 'padding: 8px 10px 4px; color: var(--text-secondary); font-size: 11px;';
   modeTitle.textContent = i18n.t('speed.current_mode');
   menu.appendChild(modeTitle);
-  const profileOptions = [
-    ['compatible', i18n.t('speed.profile_compatible')],
-    ['safe', i18n.t('speed.profile_safe')],
-    ['strong', i18n.t('speed.profile_strong')],
-  ];
-  for (const [key, label] of profileOptions) {
+  for (const profile of SPEED_PROFILES) {
     const item = document.createElement('div');
-    item.className = 'menu-item' + ((settings.speedProfile || 'compatible') === key ? ' check' : '');
-    item.textContent = label;
+    item.className = 'menu-item' + ((settings.speedProfile || 'ppapi-time') === profile.key ? ' check' : '');
+    item.textContent = i18n.t(profile.labelKey);
     item.addEventListener('click', async (ev) => {
       ev.stopPropagation();
-      settings.speedProfile = key;
+      settings.speedProfile = profile.key;
       await saveSettings();
       updateSpeedIndicator();
       setSpeedFactor(speedFactor || 1);

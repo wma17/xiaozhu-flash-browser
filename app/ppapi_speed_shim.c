@@ -50,6 +50,8 @@ typedef void (*PPP_ShutdownModule_Fn)(void);
 typedef const void *(*PPP_GetInterface_Fn)(const char *interface_name);
 typedef void (*XZSpeed_RebindImage_Fn)(const char *name_part);
 
+#define SPEED_PROFILE_MAX 7
+
 static void *g_real = NULL;
 static void *g_speed_interposer = NULL;
 static bool g_speed_rebound = false;
@@ -96,7 +98,7 @@ static bool speed_from_env(double *out) {
   const char *profile = getenv("XZFLASH_SPEED_PROFILE");
   if (profile && *profile) {
     int parsed_profile = atoi(profile);
-    if (parsed_profile >= 0 && parsed_profile <= 2) g_speed_profile = parsed_profile;
+    if (parsed_profile >= 0 && parsed_profile <= SPEED_PROFILE_MAX) g_speed_profile = parsed_profile;
   }
   return true;
 }
@@ -125,12 +127,24 @@ static bool speed_from_notify(double *out) {
   if (notify_get_state(g_notify_token, &state) != NOTIFY_STATUS_OK || state == 0) return false;
   if (state >= 1000000) {
     uint64_t profile = state / 1000000;
-    if (profile <= 2) g_speed_profile = (int)profile;
+    if (profile > 0 && profile <= SPEED_PROFILE_MAX + 1) g_speed_profile = (int)profile - 1;
     state = state % 1000000;
   }
   if (state == 0) return false;
   *out = clamp_speed((double)state / 1000.0);
   return true;
+}
+
+static bool profile_uses_ppapi_time(void) {
+  return g_speed_profile == 0 || g_speed_profile == 1;
+}
+
+static bool profile_uses_ppapi_schedule(void) {
+  return g_speed_profile == 1 || g_speed_profile == 7;
+}
+
+static bool profile_uses_native_time(void) {
+  return g_speed_profile >= 2;
 }
 
 static void apply_speed(double next) {
@@ -149,7 +163,7 @@ static void apply_speed(double next) {
     }
   }
   g_speed = next;
-  if (g_speed != 1.0 && g_speed_profile >= 2) {
+  if (g_speed != 1.0 && profile_uses_native_time()) {
     if (!g_speed_rebound) {
       if (!g_speed_interposer) load_speed_interposer();
       if (g_speed_rebind_image) {
@@ -216,6 +230,7 @@ static PP_Time shim_GetTime(void) {
   refresh_speed();
   if (!g_real_core || !g_real_core->GetTime) return CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970;
   PP_Time now = g_real_core->GetTime();
+  if (!profile_uses_ppapi_time()) return now;
   return g_time_virtual_anchor + (now - g_time_real_anchor) * g_speed;
 }
 
@@ -223,13 +238,14 @@ static PP_TimeTicks shim_GetTimeTicks(void) {
   refresh_speed();
   if (!g_real_core || !g_real_core->GetTimeTicks) return CFAbsoluteTimeGetCurrent();
   PP_TimeTicks now = g_real_core->GetTimeTicks();
+  if (!profile_uses_ppapi_time()) return now;
   return g_ticks_virtual_anchor + (now - g_ticks_real_anchor) * g_speed;
 }
 
 static void shim_CallOnMainThread(int32_t delay, PP_CompletionCallback callback, int32_t result) {
   refresh_speed();
   if (!g_real_core || !g_real_core->CallOnMainThread) return;
-  if (delay > 0 && g_speed != 1.0 && g_speed_profile >= 1) {
+  if (delay > 0 && g_speed != 1.0 && profile_uses_ppapi_schedule()) {
     double scaled = (double)delay / g_speed;
     if (scaled < 1.0) scaled = 1.0;
     delay = (int32_t)scaled;
@@ -262,7 +278,7 @@ static int32_t shim_MessageLoop_Run(PP_Resource message_loop) {
 static int32_t shim_MessageLoop_PostWork(PP_Resource message_loop, PP_CompletionCallback callback, int64_t delay_ms) {
   refresh_speed();
   if (!g_real_message_loop || !g_real_message_loop->PostWork) return -2;
-  if (delay_ms > 0 && g_speed != 1.0 && g_speed_profile >= 1) {
+  if (delay_ms > 0 && g_speed != 1.0 && profile_uses_ppapi_schedule()) {
     double scaled = (double)delay_ms / g_speed;
     if (scaled < 1.0) scaled = 1.0;
     delay_ms = (int64_t)scaled;
