@@ -659,7 +659,9 @@ function showSpeedMenu(anchor) {
     item.addEventListener('click', (ev) => {
       ev.stopPropagation();
       const t = activeTab();
-      ipcRenderer.invoke('speed:relaunch', true, t ? t.url : null);
+      ipcRenderer.invoke('speed:set', 1).then(() => {
+        ipcRenderer.invoke('speed:relaunch', true, t ? t.url : null);
+      });
     });
     menu.appendChild(item);
     document.body.appendChild(menu);

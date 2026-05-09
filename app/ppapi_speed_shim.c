@@ -186,8 +186,14 @@ static const void *shim_get_browser(const char *interface_name) {
   return iface;
 }
 
+static bool deep_speed_enabled(void) {
+  const char *enabled = getenv("XZFLASH_DEEP_SPEED_HOOK");
+  return enabled && strcmp(enabled, "1") == 0;
+}
+
 static void load_speed_interposer(void) {
   if (g_speed_interposer) return;
+  if (!deep_speed_enabled()) return;
   char dir[4096];
   Dl_info info;
   if (!dladdr((void *)&load_speed_interposer, &info) || !info.dli_fname) return;

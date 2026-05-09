@@ -174,8 +174,8 @@ const dicts = {
     'speed.custom': 'Custom…',
     'speed.custom_prompt': 'Enter Flash speed (0.5–10):',
     'speed.safe_hint': 'Only the Flash plugin process is accelerated. Changing speed relaunches the current game page.',
-    'speed.disabled_hint': 'Speed is paused in the normal build to keep Flash loading stable. A separate experimental launch can enable it for testing.',
-    'speed.enable_experimental': 'Relaunch with experimental speed',
+    'speed.disabled_hint': 'Speed is paused in normal mode to keep Flash loading stable. Experimental mode starts at 1x for safer login.',
+    'speed.enable_experimental': 'Relaunch speed mode at 1x',
     'speed.disable_experimental': 'Relaunch normal mode',
 
     'set.show_quick_note': 'Show Quick-Note button on game pages',
@@ -406,8 +406,8 @@ const dicts = {
     'speed.custom': '自定义…',
     'speed.custom_prompt': '输入 Flash 速度（0.5–10）：',
     'speed.safe_hint': '只加速 Flash 插件进程，不改系统时间。切换倍率会重启当前游戏页生效。',
-    'speed.disabled_hint': '普通启动下已暂停变速，以保证 Flash 游戏稳定加载。后续可以用单独的实验启动方式测试。',
-    'speed.enable_experimental': '重启并开启实验变速',
+    'speed.disabled_hint': '普通模式下暂停变速，保证 Flash 游戏稳定加载。实验模式会先以 1x 进入，登录后再选倍率。',
+    'speed.enable_experimental': '以 1x 重启变速模式',
     'speed.disable_experimental': '重启回普通模式',
 
     'set.show_quick_note': '在游戏页面显示快速便签按钮',
