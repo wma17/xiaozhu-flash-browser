@@ -27,8 +27,8 @@ static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static bool g_active = false;
 static char g_speed_file[1024];
 static double g_speed = 1.0;
-static int g_speed_profile = 1;
-static int g_applied_speed_profile = 1;
+static int g_speed_profile = 0;
+static int g_applied_speed_profile = 0;
 static double g_last_check_ms = 0.0;
 static struct stat g_speed_stat;
 
@@ -330,9 +330,8 @@ static uint64_t my_mach_absolute_time(void) {
 
 static int my_clock_gettime(clockid_t clk, struct timespec *tp) {
   if (!g_active || !tp) return clock_gettime(clk, tp);
-  if (g_speed_profile == 0) return clock_gettime(clk, tp);
+  if (g_speed_profile < 2) return clock_gettime(clk, tp);
   if (clk != CLOCK_REALTIME && clk != CLOCK_MONOTONIC) return clock_gettime(clk, tp);
-  if (g_speed_profile != 2 && clk == CLOCK_MONOTONIC) return clock_gettime(clk, tp);
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   *tp = (clk == CLOCK_REALTIME)
@@ -344,7 +343,7 @@ static int my_clock_gettime(clockid_t clk, struct timespec *tp) {
 
 static int my_gettimeofday(struct timeval *tv, void *tz) {
   if (!g_active || !tv) return gettimeofday(tv, tz);
-  if (g_speed_profile == 0) return gettimeofday(tv, tz);
+  if (g_speed_profile < 2) return gettimeofday(tv, tz);
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   *tv = virtual_tv();
@@ -354,7 +353,7 @@ static int my_gettimeofday(struct timeval *tv, void *tz) {
 
 static time_t my_time(time_t *tloc) {
   if (!g_active) return time(tloc);
-  if (g_speed_profile == 0) return time(tloc);
+  if (g_speed_profile < 2) return time(tloc);
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   time_t out = virtual_time_value();
@@ -365,7 +364,7 @@ static time_t my_time(time_t *tloc) {
 
 static CFAbsoluteTime my_CFAbsoluteTimeGetCurrent(void) {
   if (!g_active) return CFAbsoluteTimeGetCurrent();
-  if (g_speed_profile == 0) return CFAbsoluteTimeGetCurrent();
+  if (g_speed_profile < 2) return CFAbsoluteTimeGetCurrent();
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   CFAbsoluteTime out = virtual_cf_value();

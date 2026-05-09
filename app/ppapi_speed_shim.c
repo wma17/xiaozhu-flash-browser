@@ -65,7 +65,7 @@ static PPB_MessageLoop_1_0 g_message_loop;
 
 static char g_speed_file[1024];
 static double g_speed = 1.0;
-static int g_speed_profile = 1;
+static int g_speed_profile = 0;
 static time_t g_speed_mtime = 0;
 static PP_Time g_time_real_anchor = 0;
 static PP_Time g_time_virtual_anchor = 0;
@@ -149,7 +149,7 @@ static void apply_speed(double next) {
     }
   }
   g_speed = next;
-  if (g_speed != 1.0 && g_speed_profile != 0) {
+  if (g_speed != 1.0 && g_speed_profile >= 2) {
     if (!g_speed_rebound) {
       if (!g_speed_interposer) load_speed_interposer();
       if (g_speed_rebind_image) {
@@ -229,7 +229,7 @@ static PP_TimeTicks shim_GetTimeTicks(void) {
 static void shim_CallOnMainThread(int32_t delay, PP_CompletionCallback callback, int32_t result) {
   refresh_speed();
   if (!g_real_core || !g_real_core->CallOnMainThread) return;
-  if (delay > 0 && g_speed != 1.0) {
+  if (delay > 0 && g_speed != 1.0 && g_speed_profile >= 1) {
     double scaled = (double)delay / g_speed;
     if (scaled < 1.0) scaled = 1.0;
     delay = (int32_t)scaled;
@@ -262,7 +262,7 @@ static int32_t shim_MessageLoop_Run(PP_Resource message_loop) {
 static int32_t shim_MessageLoop_PostWork(PP_Resource message_loop, PP_CompletionCallback callback, int64_t delay_ms) {
   refresh_speed();
   if (!g_real_message_loop || !g_real_message_loop->PostWork) return -2;
-  if (delay_ms > 0 && g_speed != 1.0) {
+  if (delay_ms > 0 && g_speed != 1.0 && g_speed_profile >= 1) {
     double scaled = (double)delay_ms / g_speed;
     if (scaled < 1.0) scaled = 1.0;
     delay_ms = (int64_t)scaled;

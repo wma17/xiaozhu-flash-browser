@@ -45,7 +45,7 @@ function clampSpeedFactor(value) {
 }
 function clampSpeedProfile(value) {
   const n = Number(value);
-  if (!Number.isFinite(n)) return 1;
+  if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(2, Math.round(n)));
 }
 function writeSpeedFactor(value) {
@@ -65,7 +65,7 @@ function readSpeedFactor() {
     catch (_e) { return 1; }
   }
 }
-function publishSpeedFactor(value, profile = 1) {
+function publishSpeedFactor(value, profile = 0) {
   const speed = Math.round(clampSpeedFactor(value) * 1000);
   const mode = clampSpeedProfile(profile);
   const state = String(mode * 1000000 + speed);
@@ -80,8 +80,8 @@ function firstLaunchUrlArg() {
 // Always start at 1x so a previous accelerated session cannot affect login.
 writeSpeedFactor(1);
 process.env.XZFLASH_SPEED_FACTOR = String(readSpeedFactor());
-process.env.XZFLASH_SPEED_PROFILE = '1';
-publishSpeedFactor(1);
+process.env.XZFLASH_SPEED_PROFILE = '0';
+publishSpeedFactor(1, 0);
 
 // --- Flash plugin ---
 let pluginName, pluginVersion;
@@ -125,7 +125,8 @@ function seedDefaults() {
       defaultProfileId: 'main',
       restoreSession: true,
       sidebarCollapsed: false,
-      speedProfile: 'safe',
+      speedProfile: 'compatible',
+      speedProfileVersion: 2,
       speedAutoMute: true,
     });
   }

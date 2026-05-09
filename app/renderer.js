@@ -20,7 +20,8 @@ let settings = {
   defaultProfileId: 'main',
   restoreSession: true,
   sidebarCollapsed: false,
-  speedProfile: 'safe',
+  speedProfile: 'compatible',
+  speedProfileVersion: 2,
   speedAutoMute: true,
 };
 let speedFactor = 1;
@@ -58,8 +59,21 @@ async function loadStores() {
   skippedSites = sk || []; notes = nt || []; tasks = tk || [];
   settings = Object.assign(settings, st || {});
   settings.identity = settings.identity || {};
-  if (!['safe', 'compatible', 'strong'].includes(settings.speedProfile)) settings.speedProfile = 'safe';
-  if (settings.speedAutoMute == null) settings.speedAutoMute = true;
+  let settingsChanged = false;
+  if (!['safe', 'compatible', 'strong'].includes(settings.speedProfile)) {
+    settings.speedProfile = 'compatible';
+    settingsChanged = true;
+  }
+  if (settings.speedProfileVersion !== 2) {
+    settings.speedProfile = 'compatible';
+    settings.speedProfileVersion = 2;
+    settingsChanged = true;
+  }
+  if (settings.speedAutoMute == null) {
+    settings.speedAutoMute = true;
+    settingsChanged = true;
+  }
+  if (settingsChanged) await ipcRenderer.invoke('store:set', 'settings', settings);
   [speedFactor, speedHookEnabled] = await Promise.all([
     ipcRenderer.invoke('speed:get'),
     ipcRenderer.invoke('speed:hook-enabled'),
@@ -434,8 +448,9 @@ function updateZoomIndicator() {
 }
 
 function speedProfileCode() {
-  if (settings.speedProfile === 'compatible') return 0;
-  return settings.speedProfile === 'strong' ? 2 : 1;
+  const profile = settings.speedProfile || 'compatible';
+  if (profile === 'strong') return 2;
+  return profile === 'safe' ? 1 : 0;
 }
 
 function applySpeedAudioMute() {
@@ -651,9 +666,10 @@ function updateSpeedIndicator() {
   const el = $('speed-indicator');
   if (!el) return;
   const rounded = Math.round((speedFactor || 1) * 100) / 100;
-  const modeText = settings.speedProfile === 'strong'
+  const profile = settings.speedProfile || 'compatible';
+  const modeText = profile === 'strong'
       ? i18n.t('speed.mode_strong_short')
-      : (settings.speedProfile === 'compatible' ? i18n.t('speed.mode_compat_short') : i18n.t('speed.mode_safe_short'));
+      : (profile === 'compatible' ? i18n.t('speed.mode_compat_short') : i18n.t('speed.mode_safe_short'));
   el.textContent = speedHookEnabled ? (rounded + 'x ' + modeText + ' ▾') : '1x';
   el.classList.toggle('hot', rounded > 3);
   el.title = speedHookEnabled ? (rounded === 1 ? i18n.t('speed.normal') : i18n.t('speed.tip')) : i18n.t('speed.disabled_hint');
@@ -697,13 +713,13 @@ function showSpeedMenu(anchor) {
   modeTitle.textContent = i18n.t('speed.current_mode');
   menu.appendChild(modeTitle);
   const profileOptions = [
-    ['safe', i18n.t('speed.profile_safe')],
     ['compatible', i18n.t('speed.profile_compatible')],
+    ['safe', i18n.t('speed.profile_safe')],
     ['strong', i18n.t('speed.profile_strong')],
   ];
   for (const [key, label] of profileOptions) {
     const item = document.createElement('div');
-    item.className = 'menu-item' + ((settings.speedProfile || 'safe') === key ? ' check' : '');
+    item.className = 'menu-item' + ((settings.speedProfile || 'compatible') === key ? ' check' : '');
     item.textContent = label;
     item.addEventListener('click', async (ev) => {
       ev.stopPropagation();
