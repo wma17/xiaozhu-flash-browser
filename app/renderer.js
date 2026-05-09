@@ -1,0 +1,1556 @@
+const { ipcRenderer } = require('electron');
+const i18n = require('./i18n.js');
+
+// ----- state -----
+const tabs = [];
+let activeId = null;
+let nextId = 1;
+let homeUrl = 'https://www.4399.com/';
+let history = [];
+let bookmarks = [];
+let profiles = [];
+let passwords = [];
+let skippedSites = [];
+let notes = [];
+let tasks = [];
+let activeNoteId = null;
+let notesSaveTimer = null;
+let settings = { language: 'zh-CN', defaultProfileId: 'main', restoreSession: true, sidebarCollapsed: false };
+let speedFactor = 1;
+let speedHookEnabled = false;
+let currentRoute = 'home';
+let pendingSavePrompt = null;
+let windowProfileId = null; // each window is bound to one profile (Chrome-style)
+let menuCloseHandler = null;
+const preloadPath = 'file://' + document.location.pathname.split('/').slice(0, -1).join('/') + '/webview-preload.js';
+
+const $ = (id) => document.getElementById(id);
+const $topUrl = $('url');
+const $back = $('back');
+const $forward = $('forward');
+const $reload = $('reload');
+const $bmStar = $('bookmark-star');
+const $zoomInd = $('zoom-indicator');
+const $tabList = $('tab-list');
+const $webviews = $('webviews-container');
+
+// ---------- storage ----------
+async function loadStores() {
+  const [h, bm, pr, pw, sk, nt, tk, st, hu] = await Promise.all([
+    ipcRenderer.invoke('store:get', 'history'),
+    ipcRenderer.invoke('store:get', 'bookmarks'),
+    ipcRenderer.invoke('store:get', 'profiles'),
+    ipcRenderer.invoke('store:get', 'passwords'),
+    ipcRenderer.invoke('store:get', 'pw_skipped_sites'),
+    ipcRenderer.invoke('store:get', 'notes'),
+    ipcRenderer.invoke('store:get', 'tasks'),
+    ipcRenderer.invoke('store:get', 'settings'),
+    ipcRenderer.invoke('app:home-url'),
+  ]);
+  history = h || []; bookmarks = bm || []; profiles = pr || []; passwords = pw || [];
+  skippedSites = sk || []; notes = nt || []; tasks = tk || [];
+  settings = Object.assign(settings, st || {});
+  settings.identity = settings.identity || {};
+  [speedFactor, speedHookEnabled] = await Promise.all([
+    ipcRenderer.invoke('speed:get'),
+    ipcRenderer.invoke('speed:hook-enabled'),
+  ]);
+  homeUrl = hu || homeUrl;
+  ensureProfiles();
+}
+const saveHistory      = () => ipcRenderer.invoke('store:set', 'history', history);
+const saveBookmarks    = () => ipcRenderer.invoke('store:set', 'bookmarks', bookmarks);
+const saveProfiles     = () => ipcRenderer.invoke('store:set', 'profiles', profiles);
+const savePasswords    = () => ipcRenderer.invoke('store:set', 'passwords', passwords);
+const saveSkippedSites = () => ipcRenderer.invoke('store:set', 'pw_skipped_sites', skippedSites);
+const saveSettings     = () => ipcRenderer.invoke('store:set', 'settings', settings);
+const saveNotes        = () => ipcRenderer.invoke('store:set', 'notes', notes);
+const saveTasks        = () => ipcRenderer.invoke('store:set', 'tasks', tasks);
+
+// ---------- utility ----------
+function normalizeInput(input) {
+  input = (input || '').trim();
+  if (!input) return homeUrl;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(input)) return input;
+  if (/^[^\s]+\.[^\s]+$/.test(input) || input.startsWith('localhost') || input.startsWith('127.0.0.1')) {
+    return 'http://' + input;
+  }
+  return 'https://www.baidu.com/s?wd=' + encodeURIComponent(input);
+}
+function hostOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return url; }
+}
+function domainLetter(url) {
+  const h = hostOf(url);
+  return (h[0] || '?').toUpperCase();
+}
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+function profileById(id) { return profiles.find(p => p.id === id) || profiles[0] || null; }
+function defaultProfile() { return profileById(settings.defaultProfileId) || profiles[0] || null; }
+function ensureProfiles() {
+  let changed = false;
+  if (!Array.isArray(profiles)) profiles = [];
+  if (!profiles.length) {
+    profiles = [
+      { id: 'main', name: 'Main', color: '#F4A23C', persistent: true, createdAt: Date.now() },
+    ];
+    changed = true;
+  }
+  for (const p of profiles) {
+    if (p.persistent !== true) {
+      p.persistent = true;
+      changed = true;
+    }
+  }
+  if (!settings.defaultProfileId || !profiles.some(p => p.id === settings.defaultProfileId)) {
+    settings.defaultProfileId = profiles[0].id;
+    saveSettings();
+  }
+  if (changed) saveProfiles();
+}
+function makeProfile(name) {
+  const colors = ['#F4A23C', '#C86B2A', '#8B4E2A', '#5B4636', '#E09F3E', '#9E6240', '#4C7A5A', '#486F9E'];
+  const id = 'p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+  return { id, name: name.trim(), color: colors[profiles.length % colors.length], persistent: true, createdAt: Date.now() };
+}
+
+// ---------- i18n ----------
+function applyLanguage() {
+  i18n.setLang(settings.language || 'zh-CN');
+  i18n.applyI18n();
+  applyIdentity();
+  renderGreeting();
+  refreshProfileChip();
+  updateCounts();
+  reRenderCurrent();
+}
+function applyIdentity() {
+  const id = settings.identity || {};
+  const name = id.name || i18n.t('brand.name');
+  const sub = id.sub || i18n.t('brand.sub');
+  const bubble = id.bubble || i18n.t('sidebar.bubble');
+  const homeSub = id.homeSub || i18n.t('home.subtitle');
+  document.querySelectorAll('[data-i18n="brand.name"]').forEach(el => el.textContent = name);
+  document.querySelectorAll('[data-i18n="brand.sub"]').forEach(el => el.textContent = sub);
+  document.querySelectorAll('[data-i18n="sidebar.bubble"]').forEach(el => el.textContent = bubble);
+  document.querySelectorAll('[data-i18n="home.subtitle"]').forEach(el => el.textContent = homeSub);
+  document.title = name + ' ' + sub;
+}
+function reRenderCurrent() {
+  if (currentRoute === 'home') renderHome();
+  else if (currentRoute === 'favorites') renderFavorites();
+  else if (currentRoute === 'recent') renderRecent();
+  else if (currentRoute === 'windows') renderWindows();
+  else if (currentRoute === 'profiles') renderProfiles();
+  else if (currentRoute === 'settings') renderSettings();
+  else if (currentRoute === 'notes') renderNotes();
+  else if (currentRoute === 'tasks') renderTasks();
+  else if (currentRoute === 'library') renderLibrary();
+}
+
+// ---------- routing ----------
+function setRoute(name) {
+  closeAnyMenus();
+  currentRoute = name;
+  document.querySelectorAll('.route').forEach(el => el.classList.toggle('active', el.id === 'route-' + name));
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.route === name));
+  $webviews.style.visibility = (name === 'browser') ? 'visible' : 'hidden';
+  document.body.classList.toggle('in-browser', name === 'browser');
+  updateAccountIndicator();
+  if (name === 'browser') {
+    const t = activeTab();
+    $topUrl.value = t ? t.url : '';
+  } else {
+    $topUrl.value = '';
+  }
+  updateNavButtons();
+  updateBookmarkStar();
+  if (name === 'home') renderHome();
+  else if (name === 'favorites') renderFavorites();
+  else if (name === 'recent') renderRecent();
+  else if (name === 'windows') renderWindows();
+  else if (name === 'profiles') renderProfiles();
+  else if (name === 'settings') renderSettings();
+  else if (name === 'notes') renderNotes();
+  else if (name === 'tasks') renderTasks();
+  else if (name === 'library') renderLibrary();
+}
+
+document.querySelectorAll('.nav-item').forEach(el => {
+  el.addEventListener('click', () => setRoute(el.dataset.route));
+});
+document.querySelectorAll('[data-route-link]').forEach(el => {
+  el.addEventListener('click', () => setRoute(el.dataset.routeLink));
+});
+document.querySelectorAll('[data-open]').forEach(el => {
+  el.addEventListener('click', () => openUrl(el.dataset.open));
+});
+
+// ---------- sidebar toggle ----------
+function setSidebar(collapsed) {
+  document.body.classList.toggle('sidebar-collapsed', !!collapsed);
+}
+$('sidebar-toggle').addEventListener('click', () => {
+  const now = !document.body.classList.contains('sidebar-collapsed');
+  setSidebar(now);
+});
+function setGameMode(on) {
+  document.body.classList.toggle('game-mode', !!on);
+  const btn = $('game-mode-btn');
+  if (btn) btn.textContent = on ? '↙' : '⛶';
+}
+$('game-mode-btn').addEventListener('click', () => setGameMode(!document.body.classList.contains('game-mode')));
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.classList.contains('game-mode')) setGameMode(false);
+});
+
+// ---------- tab lifecycle ----------
+function createTab(url) {
+  const id = nextId++;
+  // All tabs inherit this window's profile. To use a different profile, open a new window.
+  const profile = profileById(windowProfileId) || defaultProfile();
+  const tab = {
+    id, title: 'Loading…', url: url || homeUrl,
+    loading: false, zoom: 1, fit: false,
+    profileId: profile ? profile.id : null,
+    currentHost: null,
+  };
+  tabs.push(tab);
+
+  const stripEl = document.createElement('div');
+  stripEl.className = 'tab';
+  stripEl.dataset.id = id;
+  stripEl.innerHTML =
+    '<span class="spinner"></span>' +
+    '<span class="pdot" style="background:' + (profile ? profile.color : '#888') + '"></span>' +
+    '<span class="t-title">Loading…</span>' +
+    '<span class="detach" title="Move to new window">⧉</span>' +
+    '<span class="close" title="Close">✕</span>';
+  stripEl.addEventListener('mousedown', (e) => {
+    if (e.target.classList.contains('close') || e.target.classList.contains('detach')) return;
+    if (e.button === 1) { closeTab(id); return; }
+    activateTab(id);
+  });
+  stripEl.querySelector('.close').addEventListener('click', (e) => { e.stopPropagation(); closeTab(id); });
+  stripEl.querySelector('.detach').addEventListener('click', (e) => { e.stopPropagation(); detachTab(id); });
+  $tabList.appendChild(stripEl);
+  tab.stripEl = stripEl;
+
+  const wv = document.createElement('webview');
+  wv.setAttribute('plugins', '');
+  wv.setAttribute('allowpopups', '');
+  wv.setAttribute('webpreferences', 'plugins=yes,contextIsolation=no,backgroundThrottling=no');
+  wv.setAttribute('preload', preloadPath);
+  if (profile) {
+    const part = 'persist:ddt-' + profile.id;
+    wv.setAttribute('partition', part);
+  }
+  wv.setAttribute('src', tab.url);
+  $webviews.appendChild(wv);
+  tab.webview = wv;
+  wv.addEventListener('focus', closeAnyMenus);
+
+  const applyZoom = () => {
+    try {
+      if (tab.fit) {
+        const w = wv.getBoundingClientRect().width || window.innerWidth;
+        tab.zoom = Math.max(0.4, Math.min(3, w / 960));
+      }
+      wv.setZoomFactor(tab.zoom);
+      if (id === activeId) updateZoomIndicator();
+    } catch (e) {}
+  };
+  tab._applyZoom = applyZoom;
+
+  wv.addEventListener('did-start-loading', () => { tab.loading = true; stripEl.classList.add('loading'); if (id === activeId) updateNavButtons(); });
+  wv.addEventListener('did-stop-loading', () => { tab.loading = false; stripEl.classList.remove('loading'); if (id === activeId) updateNavButtons(); });
+  wv.addEventListener('dom-ready', applyZoom);
+  wv.addEventListener('page-title-updated', (e) => {
+    tab.title = e.title || hostOf(tab.url);
+    stripEl.querySelector('.t-title').textContent = tab.title;
+    stripEl.title = tab.title;
+    if (currentRoute === 'windows') renderWindows();
+  });
+  wv.addEventListener('did-navigate', (e) => {
+    tab.url = e.url;
+    if (id === activeId) $topUrl.value = e.url;
+    recordHistory(tab);
+    updateNavButtons();
+    updateBookmarkStar();
+    if (currentRoute === 'windows') renderWindows();
+  });
+  wv.addEventListener('did-navigate-in-page', (e) => {
+    tab.url = e.url;
+    if (id === activeId) $topUrl.value = e.url;
+    recordHistory(tab);
+    updateNavButtons();
+    updateBookmarkStar();
+  });
+  // Password autofill + save pipeline (via webview preload IPC).
+  wv.addEventListener('ipc-message', (e) => {
+    try {
+      const payload = (e.args && e.args[0]) || {};
+      if (e.channel === 'pw:request') {
+        const host = payload.host || '';
+        tab.currentHost = host;
+        const matches = findAllCredentials(tab.profileId, host);
+        if (id === activeId) updateAccountIndicator();
+        if (matches.length === 1) {
+          const top = matches[0];
+          wv.send('pw:fill', { username: top.username, password: top.password });
+        } else if (matches.length > 1 && id === activeId) {
+          showAccountPicker(tab, host, matches);
+        }
+      } else if (e.channel === 'pw:submit') {
+        const host = payload.host || tab.currentHost || hostOf(tab.url);
+        const username = payload.username || '';
+        const password = payload.password || '';
+        if (!password || isSkipped(tab.profileId, host)) return;
+        const existing = passwords.find(p =>
+          p.profileId === tab.profileId &&
+          hostMatches(p.host, host) &&
+          (p.username || '') === username
+        );
+        if (existing && existing.password === password) return;
+        showSavePrompt({ host, username, password, profileId: tab.profileId });
+      } else if (e.channel === 'pw:capture-result') {
+        if (!payload.found || !payload.password) {
+          alert(i18n.t('pw.capture_empty'));
+          return;
+        }
+        showSavePrompt({
+          host: payload.host || tab.currentHost || hostOf(tab.url),
+          username: payload.username || '',
+          password: payload.password,
+          profileId: tab.profileId,
+        });
+      }
+    } catch (err) {}
+  });
+
+  activateTab(id);
+  setRoute('browser');
+  return tab;
+}
+
+function activateTab(id) {
+  const tab = tabs.find(t => t.id === id);
+  if (!tab) return;
+  activeId = id;
+  tabs.forEach(t => {
+    t.stripEl.classList.toggle('active', t.id === id);
+    t.webview.classList.toggle('active', t.id === id);
+  });
+  if (currentRoute === 'browser') $topUrl.value = tab.url;
+  updateNavButtons();
+  updateBookmarkStar();
+  updateZoomIndicator();
+  updateAccountIndicator();
+}
+
+function closeTab(id) {
+  const idx = tabs.findIndex(t => t.id === id);
+  if (idx === -1) return;
+  const tab = tabs[idx];
+  tab.stripEl.remove();
+  tab.webview.remove();
+  tabs.splice(idx, 1);
+  if (tabs.length === 0) {
+    activeId = null;
+    setRoute('home');
+    return;
+  }
+  if (activeId === id) activateTab(tabs[Math.min(idx, tabs.length - 1)].id);
+  if (currentRoute === 'windows') renderWindows();
+}
+
+async function detachTab(id) {
+  const tab = tabs.find(t => t.id === id);
+  if (!tab) return;
+  await ipcRenderer.invoke('window:open', tab.url, tab.profileId);
+  closeTab(id);
+}
+
+function activeTab() { return tabs.find(t => t.id === activeId); }
+
+function openUrl(url) {
+  if (currentRoute === 'browser' && activeTab()) {
+    activeTab().webview.loadURL(url);
+  } else {
+    createTab(url);
+  }
+}
+
+// ---------- top bar ----------
+function updateNavButtons() {
+  const t = activeTab();
+  const canBack = t && currentRoute === 'browser' && t.webview.canGoBack && t.webview.canGoBack();
+  const canFwd  = t && currentRoute === 'browser' && t.webview.canGoForward && t.webview.canGoForward();
+  $back.classList.toggle('disabled', !canBack);
+  $forward.classList.toggle('disabled', !canFwd);
+}
+function updateBookmarkStar() {
+  const t = activeTab();
+  const url = (currentRoute === 'browser' && t) ? t.url : null;
+  const item = url ? bookmarks.find(b => b.url === url) : null;
+  const isFav = item && item.favorite !== false;
+  $bmStar.textContent = isFav ? '❤' : '♡';
+  $bmStar.classList.toggle('active', !!isFav);
+}
+function updateZoomIndicator() {
+  const t = activeTab();
+  if (!t || !$zoomInd) return;
+  const pct = Math.round((t.zoom || 1) * 100);
+  $zoomInd.textContent = t.fit ? ('⤢ ' + pct + '%') : (pct + '% ▾');
+  $zoomInd.title = t.fit ? i18n.t('zoom.auto') : '';
+}
+// Clicking the zoom indicator opens a dropdown with preset values + custom + fit.
+$('zoom-indicator').addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  const t = activeTab();
+  if (!t) return;
+  closeAnyMenus();
+  const rect = ev.currentTarget.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'menu';
+  menu.style.top = (rect.bottom + 4) + 'px';
+  menu.style.left = (rect.right - 160) + 'px';
+  menu.style.minWidth = '150px';
+  const presets = [50, 75, 90, 100, 110, 125, 150, 200];
+  for (const p of presets) {
+    const item = document.createElement('div');
+    const isCurrent = !t.fit && Math.abs((t.zoom || 1) * 100 - p) < 0.5;
+    item.className = 'menu-item' + (isCurrent ? ' check' : '');
+    item.textContent = p + '%';
+    item.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      t.fit = false;
+      t.zoom = p / 100;
+      try { t.webview.setZoomFactor(t.zoom); } catch (e) {}
+      updateZoomIndicator();
+      closeAnyMenus();
+    });
+    menu.appendChild(item);
+  }
+  // Divider
+  const div = document.createElement('div');
+  div.style.cssText = 'border-top: 1px solid var(--border); margin: 4px 6px;';
+  menu.appendChild(div);
+  // Fit
+  const fitItem = document.createElement('div');
+  fitItem.className = 'menu-item' + (t.fit ? ' check' : '');
+  fitItem.textContent = i18n.t('zoom.fit');
+  fitItem.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    t.fit = true;
+    t._applyZoom();
+    closeAnyMenus();
+  });
+  menu.appendChild(fitItem);
+  // Custom
+  const customItem = document.createElement('div');
+  customItem.className = 'menu-item';
+  customItem.textContent = i18n.t('zoom.custom');
+  customItem.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const cur = Math.round((t.zoom || 1) * 100);
+    const inp = prompt(i18n.t('zoom.custom_prompt'), String(cur));
+    closeAnyMenus();
+    if (inp == null) return;
+    const n = parseFloat(inp);
+    if (isNaN(n) || n < 25 || n > 500) return;
+    t.fit = false;
+    t.zoom = n / 100;
+    try { t.webview.setZoomFactor(t.zoom); } catch (e) {}
+    updateZoomIndicator();
+  });
+  menu.appendChild(customItem);
+  document.body.appendChild(menu);
+  armMenuClose();
+});
+function refreshProfileChip() {
+  const p = profileById(windowProfileId) || defaultProfile();
+  if (!p) return;
+  $('profile-chip').querySelector('.dot').style.background = p.color;
+  $('profile-chip-name').textContent = p.name;
+}
+
+$back.addEventListener('click', () => { const t = activeTab(); if (t && t.webview.canGoBack()) t.webview.goBack(); });
+$forward.addEventListener('click', () => { const t = activeTab(); if (t && t.webview.canGoForward()) t.webview.goForward(); });
+$reload.addEventListener('click', () => { const t = activeTab(); if (t) t.webview.reload(); });
+$('go-home').addEventListener('click', () => setRoute('home'));
+$('new-tab-btn').addEventListener('click', () => createTab(homeUrl));
+
+$topUrl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    const url = normalizeInput($topUrl.value);
+    openUrl(url);
+  }
+});
+$topUrl.addEventListener('focus', () => $topUrl.select());
+
+$bmStar.addEventListener('click', () => {
+  const t = activeTab();
+  if (!t || currentRoute !== 'browser') return;
+  const i = bookmarks.findIndex(b => b.url === t.url);
+  if (i >= 0) {
+    bookmarks[i].favorite = !(bookmarks[i].favorite !== false);
+  } else {
+    bookmarks.unshift(makeLibraryItem(t.url, t.title, { favorite: true }));
+  }
+  saveBookmarks();
+  updateBookmarkStar();
+  if (currentRoute === 'library') renderLibrary();
+  else if (currentRoute === 'favorites') renderFavorites();
+  else if (currentRoute === 'home') renderHomeFavorites();
+});
+
+// Profile chip click opens the ⋯ menu as a shortcut (same entries).
+$('profile-chip').addEventListener('click', (ev) => { ev.stopPropagation(); showMoreMenu(ev.currentTarget); });
+$('more-btn').addEventListener('click', (ev) => { ev.stopPropagation(); showMoreMenu(ev.currentTarget); });
+
+function showMoreMenu(anchor) {
+  closeAnyMenus();
+  const rect = anchor.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'menu';
+  menu.style.top = (rect.bottom + 4) + 'px';
+  menu.style.right = (window.innerWidth - rect.right) + 'px';
+  menu.style.minWidth = '220px';
+  const addItem = (label, opts) => {
+    const it = document.createElement('div');
+    it.className = 'menu-item' + (opts && opts.check ? ' check' : '');
+    if (opts && opts.dot) {
+      it.innerHTML = '<span class="dot" style="background:' + opts.dot + '"></span>' + escapeHtml(label);
+    } else {
+      it.textContent = label;
+    }
+    it.addEventListener('click', (ev) => { ev.stopPropagation(); closeAnyMenus(); if (opts && opts.onClick) opts.onClick(); });
+    menu.appendChild(it);
+  };
+  const addDivider = () => {
+    const d = document.createElement('div');
+    d.style.cssText = 'border-top: 1px solid var(--border); margin: 4px 6px;';
+    menu.appendChild(d);
+  };
+  // New window in each profile
+  for (const p of profiles) {
+    const label = i18n.t('more.new_window_in').replace('{name}', p.name);
+    addItem(label, { dot: p.color, check: p.id === windowProfileId, onClick: () => ipcRenderer.invoke('window:open', null, p.id) });
+  }
+  addDivider();
+  addItem(i18n.t('more.add_current_to_library'), { onClick: () => { const t = activeTab(); if (t) addToLibrary(t.url, t.title); } });
+  addItem(i18n.t('more.open_all_profiles'), { onClick: () => {
+    const t = activeTab();
+    ipcRenderer.invoke('window:open-many', t ? t.url : homeUrl, profiles.map(p => p.id));
+  } });
+  addItem(i18n.t('more.manage_profiles'), { onClick: () => setRoute('profiles') });
+  addItem(i18n.t('more.settings'),        { onClick: () => setRoute('settings') });
+  addItem(i18n.t('more.shortcuts'),       { onClick: () => setRoute('shortcuts') });
+  addItem(i18n.t('more.about'),           { onClick: () => setRoute('about') });
+  document.body.appendChild(menu);
+  armMenuClose();
+}
+function armMenuClose() {
+  if (menuCloseHandler) {
+    document.removeEventListener('mousedown', menuCloseHandler, true);
+    document.removeEventListener('keydown', menuCloseHandler, true);
+    window.removeEventListener('blur', closeAnyMenus);
+  }
+  menuCloseHandler = (e) => {
+    if (e.type === 'keydown' && e.key !== 'Escape') return;
+    if (e.target && e.target.closest && e.target.closest('.menu')) return;
+    closeAnyMenus();
+  };
+  setTimeout(() => {
+    document.addEventListener('mousedown', menuCloseHandler, true);
+    document.addEventListener('keydown', menuCloseHandler, true);
+    window.addEventListener('blur', closeAnyMenus);
+  }, 0);
+}
+function closeAnyMenus() {
+  document.querySelectorAll('.menu').forEach(m => m.remove());
+  if (menuCloseHandler) {
+    document.removeEventListener('mousedown', menuCloseHandler, true);
+    document.removeEventListener('keydown', menuCloseHandler, true);
+    window.removeEventListener('blur', closeAnyMenus);
+    menuCloseHandler = null;
+  }
+}
+
+// ---------- zoom ----------
+function bumpZoom(delta) {
+  const t = activeTab();
+  if (!t) return;
+  t.fit = false;
+  t.zoom = Math.max(0.4, Math.min(3, (t.zoom || 1) + delta));
+  t.webview.setZoomFactor(t.zoom);
+  updateZoomIndicator();
+}
+function resetZoom() { const t = activeTab(); if (!t) return; t.fit = false; t.zoom = 1; t.webview.setZoomFactor(1); updateZoomIndicator(); }
+function fitZoom() { const t = activeTab(); if (!t) return; t.fit = true; t._applyZoom(); }
+$('zoom-in-btn').addEventListener('click', () => bumpZoom(0.1));
+$('zoom-out-btn').addEventListener('click', () => bumpZoom(-0.1));
+$('fit-btn').addEventListener('click', fitZoom);
+window.addEventListener('resize', () => {
+  for (const t of tabs) if (t.fit) t._applyZoom();
+});
+
+// ---------- Flash speed ----------
+function updateSpeedIndicator() {
+  const el = $('speed-indicator');
+  if (!el) return;
+  const rounded = Math.round((speedFactor || 1) * 100) / 100;
+  el.textContent = speedHookEnabled ? (rounded + 'x ▾') : '1x';
+  el.classList.toggle('hot', rounded > 3);
+  el.title = speedHookEnabled ? (rounded === 1 ? i18n.t('speed.normal') : i18n.t('speed.tip')) : i18n.t('speed.disabled_hint');
+}
+async function setSpeedFactor(factor) {
+  const next = await ipcRenderer.invoke('speed:set', factor);
+  speedFactor = next || 1;
+  updateSpeedIndicator();
+}
+function showSpeedMenu(anchor) {
+  closeAnyMenus();
+  const rect = anchor.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'menu';
+  menu.style.top = (rect.bottom + 4) + 'px';
+  menu.style.left = (rect.right - 170) + 'px';
+  menu.style.minWidth = '160px';
+  if (!speedHookEnabled) {
+    const hint = document.createElement('div');
+    hint.style.cssText = 'max-width: 240px; padding: 10px 12px; color: var(--text-secondary); font-size: 11px; line-height: 1.45;';
+    hint.textContent = i18n.t('speed.disabled_hint');
+    menu.appendChild(hint);
+    const item = document.createElement('div');
+    item.className = 'menu-item';
+    item.textContent = i18n.t('speed.enable_experimental');
+    item.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      ipcRenderer.invoke('speed:relaunch', true);
+    });
+    menu.appendChild(item);
+    document.body.appendChild(menu);
+    armMenuClose();
+    return;
+  }
+  const offItem = document.createElement('div');
+  offItem.className = 'menu-item';
+  offItem.textContent = i18n.t('speed.disable_experimental');
+  offItem.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    ipcRenderer.invoke('speed:relaunch', false);
+  });
+  menu.appendChild(offItem);
+  const topDiv = document.createElement('div');
+  topDiv.style.cssText = 'border-top: 1px solid var(--border); margin: 4px 6px;';
+  menu.appendChild(topDiv);
+  const presets = [0.5, 0.8, 1, 1.25, 1.5, 2, 3, 5, 10];
+  for (const p of presets) {
+    const item = document.createElement('div');
+    item.className = 'menu-item' + (Math.abs((speedFactor || 1) - p) < 0.01 ? ' check' : '');
+    item.textContent = p + 'x';
+    item.addEventListener('click', (ev) => { ev.stopPropagation(); setSpeedFactor(p); closeAnyMenus(); });
+    menu.appendChild(item);
+  }
+  const div = document.createElement('div');
+  div.style.cssText = 'border-top: 1px solid var(--border); margin: 4px 6px;';
+  menu.appendChild(div);
+  const customItem = document.createElement('div');
+  customItem.className = 'menu-item';
+  customItem.textContent = i18n.t('speed.custom');
+  customItem.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const inp = prompt(i18n.t('speed.custom_prompt'), String(speedFactor || 1));
+    closeAnyMenus();
+    if (inp == null) return;
+    const n = parseFloat(inp);
+    if (isNaN(n) || n < 0.5 || n > 10) return;
+    setSpeedFactor(n);
+  });
+  menu.appendChild(customItem);
+  const hint = document.createElement('div');
+  hint.style.cssText = 'max-width: 220px; padding: 8px 10px; color: var(--text-secondary); font-size: 11px; line-height: 1.4;';
+  hint.textContent = i18n.t('speed.safe_hint');
+  menu.appendChild(hint);
+  document.body.appendChild(menu);
+  armMenuClose();
+}
+$('speed-indicator').addEventListener('click', (ev) => { ev.stopPropagation(); showSpeedMenu(ev.currentTarget); });
+ipcRenderer.on('speed:changed', (_e, factor) => { speedFactor = factor || 1; updateSpeedIndicator(); });
+
+// ---------- history ----------
+function recordHistory(tab) {
+  if (!tab || !tab.url) return;
+  if (tab.url.startsWith('about:') || tab.url === 'data:') return;
+  const last = history[0];
+  if (last && last.url === tab.url) { last.visitedAt = Date.now(); saveHistory(); return; }
+  history.unshift({ url: tab.url, title: tab.title || tab.url, visitedAt: Date.now(), profileId: tab.profileId });
+  if (history.length > 5000) history.length = 5000;
+  saveHistory();
+  if (currentRoute === 'home') renderHomeContinue();
+  else if (currentRoute === 'recent') renderRecent();
+}
+
+// ---------- Home ----------
+function renderHome() {
+  renderGreeting();
+  renderHomeContinue();
+  renderHomeFavorites();
+  renderHomeWindows();
+}
+function renderGreeting() {
+  const h = new Date().getHours();
+  let k = 'greet.evening';
+  if (h < 5) k = 'greet.night';
+  else if (h < 12) k = 'greet.morning';
+  else if (h < 18) k = 'greet.afternoon';
+  $('greet-text').textContent = i18n.t(k);
+}
+function uniqueRecentByHost(max) {
+  const seen = new Set();
+  const out = [];
+  for (const h of history) {
+    const host = hostOf(h.url);
+    if (seen.has(host)) continue;
+    seen.add(host);
+    out.push(h);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+function cardEl(entry, onClick) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  const host = hostOf(entry.url);
+  el.innerHTML =
+    '<div class="cover"><div class="letter">' + domainLetter(entry.url) + '</div></div>' +
+    '<div class="title">' + escapeHtml(entry.title || host) + '</div>' +
+    '<div class="meta">' + escapeHtml(host) + '</div>';
+  el.addEventListener('click', onClick);
+  return el;
+}
+function renderHomeContinue() {
+  const c = $('home-continue'); c.innerHTML = '';
+  const items = uniqueRecentByHost(6);
+  if (!items.length) {
+    c.innerHTML = '<div class="placeholder" style="grid-column: 1/-1; padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('home.empty_history')) + '</div></div>';
+    return;
+  }
+  for (const e of items) c.appendChild(cardEl(e, () => openUrl(e.url)));
+}
+function renderHomeFavorites() {
+  const c = $('home-favorites'); c.innerHTML = '';
+  const items = bookmarks.filter(b => b.favorite !== false).slice(0, 6);
+  if (!items.length) {
+    c.innerHTML = '<div class="placeholder" style="grid-column: 1/-1; padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('home.empty_favorites')) + '</div></div>';
+    return;
+  }
+  for (const e of items) c.appendChild(cardEl(e, () => openUrl(e.url)));
+}
+function renderHomeWindows() {
+  const c = $('home-windows'); c.innerHTML = '';
+  if (!tabs.length) {
+    c.innerHTML = '<div class="placeholder" style="padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('home.empty_windows')) + '</div></div>';
+    return;
+  }
+  for (const t of tabs) c.appendChild(winrowEl(t));
+}
+function winrowEl(t) {
+  const profile = profileById(t.profileId);
+  const row = document.createElement('div');
+  row.className = 'winrow';
+  row.innerHTML =
+    '<div style="flex: 1; min-width: 0;">' +
+      '<div class="w-title">' + escapeHtml(t.title || hostOf(t.url)) + '</div>' +
+      '<div class="w-url">' + escapeHtml(hostOf(t.url)) + '</div>' +
+    '</div>' +
+    '<span class="tag"><span class="dot" style="background:' + (profile ? profile.color : '#888') + '"></span>' + escapeHtml(profile ? profile.name : '-') + '</span>' +
+    '<button class="btn" data-act="focus">' + escapeHtml(i18n.t('win.focus')) + '</button>' +
+    '<button class="btn" data-act="dup">' + escapeHtml(i18n.t('win.duplicate')) + '</button>' +
+    '<button class="btn danger" data-act="close">' + escapeHtml(i18n.t('win.close')) + '</button>';
+  row.querySelector('[data-act="focus"]').addEventListener('click', () => { activateTab(t.id); setRoute('browser'); });
+  row.querySelector('[data-act="dup"]').addEventListener('click', () => ipcRenderer.invoke('window:open', t.url, t.profileId));
+  row.querySelector('[data-act="close"]').addEventListener('click', () => closeTab(t.id));
+  return row;
+}
+
+// ---------- Favorites / Recent ----------
+function renderFavorites() {
+  const q = ($('fav-search').value || '').toLowerCase();
+  const base = bookmarks.filter(b => b.favorite !== false);
+  const items = q ? base.filter(b => (b.title || '').toLowerCase().includes(q) || (b.url || '').toLowerCase().includes(q)) : base;
+  $('fav-count').textContent = items.length + ' ' + i18n.t(items.length === 1 ? 'common.item' : 'common.items');
+  const list = $('fav-list'); list.innerHTML = '';
+  for (const e of items.slice(0, 1000)) list.appendChild(entryEl(e, 'fav'));
+}
+function renderRecent() {
+  const q = ($('rec-search').value || '').toLowerCase();
+  const items = q ? history.filter(h => (h.title || '').toLowerCase().includes(q) || (h.url || '').toLowerCase().includes(q)) : history;
+  $('rec-count').textContent = items.length + ' ' + i18n.t(items.length === 1 ? 'common.item' : 'common.items');
+  const list = $('rec-list'); list.innerHTML = '';
+  for (const e of items.slice(0, 1000)) list.appendChild(entryEl(e, 'rec'));
+}
+function entryEl(e, kind) {
+  const el = document.createElement('div');
+  el.className = 'entry';
+  const host = hostOf(e.url);
+  const when = kind === 'rec' ? formatTime(e.visitedAt) : '';
+  el.innerHTML =
+    '<div class="e-cover">' + domainLetter(e.url) + '</div>' +
+    '<div class="e-text">' +
+      '<div class="e-title">' + escapeHtml(e.title || host) + '</div>' +
+      '<div class="e-url">' + escapeHtml(e.url) + (when ? ' · ' + when : '') + '</div>' +
+    '</div>' +
+    '<div class="e-actions">' +
+      '<button data-act="open">' + escapeHtml(i18n.t('common.open')) + '</button>' +
+      '<button data-act="new">' + escapeHtml(i18n.t('common.new_window')) + '</button>' +
+      '<button data-act="del">' + escapeHtml(i18n.t('common.remove')) + '</button>' +
+    '</div>';
+  el.addEventListener('click', (ev) => { if (!ev.target.closest('.e-actions')) openUrl(e.url); });
+  el.querySelector('[data-act="open"]').addEventListener('click', (ev) => { ev.stopPropagation(); openUrl(e.url); });
+  el.querySelector('[data-act="new"]').addEventListener('click', (ev) => { ev.stopPropagation(); ipcRenderer.invoke('window:open', e.url); });
+  el.querySelector('[data-act="del"]').addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const arr = kind === 'rec' ? history : bookmarks;
+    const i = arr.indexOf(e);
+    if (i >= 0) arr.splice(i, 1);
+    if (kind === 'rec') saveHistory(); else saveBookmarks();
+    if (kind === 'rec') renderRecent(); else renderFavorites();
+    updateBookmarkStar();
+  });
+  return el;
+}
+$('fav-search').addEventListener('input', renderFavorites);
+$('rec-search').addEventListener('input', renderRecent);
+
+// ---------- Windows ----------
+function renderWindows() {
+  const list = $('win-list'); list.innerHTML = '';
+  $('win-count').textContent = tabs.length + ' ' + i18n.t(tabs.length === 1 ? 'common.window' : 'common.windows');
+  if (!tabs.length) {
+    list.innerHTML = '<div class="placeholder" style="padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('win.empty')) + '</div></div>';
+    return;
+  }
+  for (const t of tabs) list.appendChild(winrowEl(t));
+}
+
+// ---------- Profiles ----------
+async function renderProfiles() {
+  const list = $('profile-list'); list.innerHTML = '';
+  ensureProfiles();
+  // Kick off async cookie counts
+  const stats = {};
+  await Promise.all(profiles.map(async p => {
+    stats[p.id] = await ipcRenderer.invoke('profile:stats', p);
+  }));
+  for (const p of profiles) {
+    const card = document.createElement('div');
+    card.className = 'profile-card';
+    const s = stats[p.id] || { cookies: 0 };
+    const isDefault = p.id === settings.defaultProfileId;
+    const pwCount = passwords.filter(pw => pw.profileId === p.id).length;
+    card.innerHTML =
+      '<div class="swatch" style="background:' + p.color + '"></div>' +
+      '<div>' +
+        '<div class="pc-name">' + escapeHtml(p.name) +
+          (isDefault ? '<span class="pc-tag default">' + escapeHtml(i18n.t('prof.default')) + '</span>' : '') +
+        '</div>' +
+        '<div class="pc-meta">' + s.cookies + escapeHtml(i18n.t('prof.cookies')) +
+          ' · ' + pwCount + ' ' + escapeHtml(i18n.t('prof.passwords_count')) +
+        '</div>' +
+      '</div>' +
+      '<div class="pc-actions">' +
+        '<button data-act="open">' + escapeHtml(i18n.t('prof.open_window')) + '</button>' +
+        '<button data-act="clone">' + escapeHtml(i18n.t('prof.clone_current')) + '</button>' +
+        (isDefault ? '' : '<button data-act="default" class="primary">' + escapeHtml(i18n.t('prof.set_default')) + '</button>') +
+        '<button data-act="rename">' + escapeHtml(i18n.t('prof.edit')) + '</button>' +
+        '<button data-act="clear">' + escapeHtml(i18n.t('prof.clear')) + '</button>' +
+        (p.id === 'main' ? '' : '<button data-act="delete" class="danger">' + escapeHtml(i18n.t('prof.delete')) + '</button>') +
+      '</div>';
+    const q = (sel) => card.querySelector(sel);
+    const bt = q('[data-act="default"]'); if (bt) bt.addEventListener('click', async () => {
+      settings.defaultProfileId = p.id; await saveSettings(); refreshProfileChip(); renderProfiles();
+    });
+    q('[data-act="open"]').addEventListener('click', () => ipcRenderer.invoke('window:open', homeUrl, p.id));
+    q('[data-act="clone"]').addEventListener('click', () => {
+      const t = activeTab();
+      ipcRenderer.invoke('window:open', t ? t.url : homeUrl, p.id);
+    });
+    q('[data-act="rename"]').addEventListener('click', async () => {
+      const name = prompt(i18n.t('prof.edit') + ':', p.name);
+      if (name && name.trim()) { p.name = name.trim(); await saveProfiles(); refreshProfileChip(); renderProfiles(); }
+    });
+    q('[data-act="clear"]').addEventListener('click', async () => {
+      if (!confirm(i18n.t('prof.confirm_clear'))) return;
+      await ipcRenderer.invoke('profile:clear', p);
+      renderProfiles();
+    });
+    const db = q('[data-act="delete"]');
+    if (db) db.addEventListener('click', async () => {
+      if (!confirm(i18n.t('prof.confirm_delete'))) return;
+      await ipcRenderer.invoke('profile:clear', p);
+      const i = profiles.indexOf(p);
+      if (i >= 0) profiles.splice(i, 1);
+      if (settings.defaultProfileId === p.id) { settings.defaultProfileId = profiles[0] ? profiles[0].id : null; await saveSettings(); refreshProfileChip(); }
+      if (windowProfileId === p.id) windowProfileId = settings.defaultProfileId || (profiles[0] && profiles[0].id);
+      await saveProfiles();
+      refreshProfileChip();
+      renderProfiles();
+    });
+    list.appendChild(card);
+  }
+}
+$('profile-create-btn').addEventListener('click', async () => {
+  const name = prompt(i18n.t('prof.new_profile') + ':', i18n.t('prof.new_profile'));
+  if (!name || !name.trim()) return;
+  profiles.push(makeProfile(name));
+  await saveProfiles();
+  renderProfiles();
+});
+
+// ---------- Settings ----------
+function renderSettings() {
+  // Identity inputs
+  const id = settings.identity || {};
+  $('id-name').value = id.name || '';
+  $('id-sub').value = id.sub || '';
+  $('id-bubble').value = id.bubble || '';
+  $('id-home-sub').value = id.homeSub || '';
+  $('id-name').placeholder = i18n.t('brand.name');
+  $('id-sub').placeholder = i18n.t('brand.sub');
+  $('id-bubble').placeholder = i18n.t('sidebar.bubble');
+  $('id-home-sub').placeholder = i18n.t('home.subtitle');
+  // Language select
+  const langSel = $('setting-language');
+  langSel.value = settings.language || 'zh-CN';
+  // Default profile select
+  const dpSel = $('setting-default-profile');
+  dpSel.innerHTML = '';
+  for (const p of profiles) {
+    const opt = document.createElement('option');
+    opt.value = p.id; opt.textContent = p.name;
+    if (p.id === settings.defaultProfileId) opt.selected = true;
+    dpSel.appendChild(opt);
+  }
+  // Switches
+  setSwitch($('setting-restore-session'), !!settings.restoreSession);
+  setSwitch($('setting-sidebar-collapsed'), !!settings.sidebarCollapsed);
+  setSwitch($('setting-show-quick-note'), settings.showQuickNote !== false);
+  // Passwords list
+  renderPasswords();
+}
+function setSwitch(el, on) { el.classList.toggle('on', !!on); }
+function attachSwitch(el, onChange) {
+  el.addEventListener('click', () => {
+    const now = !el.classList.contains('on');
+    setSwitch(el, now);
+    onChange(now);
+  });
+}
+function bindIdentityInput(key, el) {
+  let debounce;
+  el.addEventListener('input', () => {
+    settings.identity = settings.identity || {};
+    settings.identity[key] = el.value;
+    applyIdentity();
+    clearTimeout(debounce);
+    debounce = setTimeout(() => saveSettings(), 250);
+  });
+}
+bindIdentityInput('name',    $('id-name'));
+bindIdentityInput('sub',     $('id-sub'));
+bindIdentityInput('bubble',  $('id-bubble'));
+bindIdentityInput('homeSub', $('id-home-sub'));
+$('id-reset').addEventListener('click', async () => {
+  settings.identity = {};
+  await saveSettings();
+  applyIdentity();
+  renderSettings();
+});
+
+$('setting-language').addEventListener('change', async (e) => {
+  settings.language = e.target.value;
+  await saveSettings();
+  applyLanguage();
+});
+$('setting-default-profile').addEventListener('change', async (e) => {
+  settings.defaultProfileId = e.target.value;
+  await saveSettings();
+  refreshProfileChip();
+});
+attachSwitch($('setting-restore-session'), async (v) => { settings.restoreSession = v; await saveSettings(); });
+attachSwitch($('setting-sidebar-collapsed'), async (v) => { settings.sidebarCollapsed = v; await saveSettings(); });
+attachSwitch($('setting-show-quick-note'), async (v) => {
+  settings.showQuickNote = v;
+  document.body.classList.toggle('hide-quick-note', !v);
+  await saveSettings();
+});
+$('setting-clear-history').addEventListener('click', async () => {
+  history = []; await saveHistory();
+  alert(i18n.t('set.data_cleared'));
+  if (currentRoute === 'recent') renderRecent();
+  else if (currentRoute === 'home') renderHomeContinue();
+});
+$('setting-clear-cookies').addEventListener('click', async () => {
+  await ipcRenderer.invoke('data:clear-cookies-cache-all');
+  alert(i18n.t('set.data_cleared'));
+});
+
+// ---------- Passwords ----------
+function normalizeHost(host) {
+  return String(host || '').toLowerCase().replace(/^www\./, '');
+}
+function hostMatches(savedHost, pageHost) {
+  const saved = normalizeHost(savedHost);
+  const page = normalizeHost(pageHost);
+  return saved === page || page.endsWith('.' + saved) || saved.endsWith('.' + page);
+}
+function findCredential(profileId, host) {
+  return findAllCredentials(profileId, host)[0] || null;
+}
+function findAllCredentials(profileId, host) {
+  return passwords
+    .filter(p => p.profileId === profileId && hostMatches(p.host, host))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+// ----- Multi-account picker UI -----
+function showAccountPicker(tab, host, credentials) {
+  $('ap-site').textContent = host;
+  const list = $('ap-list');
+  list.innerHTML = '';
+  const sorted = credentials.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  for (const c of sorted) {
+    const prof = profileById(c.profileId);
+    const row = document.createElement('div');
+    row.className = 'ap-account';
+    const letter = ((c.username || '?')[0] || '?').toUpperCase();
+    row.innerHTML =
+      '<div class="ap-avatar" style="background:' + (prof ? prof.color : '#888') + '">' + escapeHtml(letter) + '</div>' +
+      '<div class="ap-main">' +
+        '<div class="ap-user">' + escapeHtml(c.username || i18n.t('pw.no_username')) + '</div>' +
+        '<div class="ap-profile">' + escapeHtml(prof ? prof.name : '-') + '</div>' +
+      '</div>';
+    row.addEventListener('click', () => {
+      try { tab.webview.send('pw:fill', { username: c.username, password: c.password }); } catch (e) {}
+      hideAccountPicker();
+    });
+    list.appendChild(row);
+  }
+  $('account-picker').classList.add('visible');
+}
+function hideAccountPicker() { $('account-picker').classList.remove('visible'); }
+$('ap-close').addEventListener('click', hideAccountPicker);
+
+// Account indicator and manual 🔑 save button were removed from the top bar.
+// Kept stub so calls from activateTab/setRoute don't throw.
+function updateAccountIndicator() {}
+function isSkipped(profileId, host) {
+  const h = normalizeHost(host);
+  return skippedSites.some(s => normalizeHost(s.host) === h && s.profileId === profileId);
+}
+function showSavePrompt({ host, username, password, profileId }) {
+  pendingSavePrompt = { host, username, password, profileId };
+  $('sp-site').textContent = host;
+  $('sp-username').value = username || '';
+  $('sp-password').value = password || '';
+  const p = profileById(profileId); $('sp-profile').value = p ? p.name : '-';
+  $('save-prompt').classList.add('visible');
+}
+function hideSavePrompt() {
+  pendingSavePrompt = null;
+  $('save-prompt').classList.remove('visible');
+}
+$('sp-save').addEventListener('click', async () => {
+  if (!pendingSavePrompt) return;
+  const u = $('sp-username').value;
+  const pw = $('sp-password').value;
+  const { host, profileId } = pendingSavePrompt;
+  const cleanHost = normalizeHost(host);
+  const idx = passwords.findIndex(p => normalizeHost(p.host) === cleanHost && p.profileId === profileId && p.username === u);
+  const entry = { host: cleanHost, username: u, password: pw, profileId, updatedAt: Date.now() };
+  if (idx >= 0) passwords[idx] = entry; else passwords.unshift(entry);
+  await savePasswords();
+  hideSavePrompt();
+  if (currentRoute === 'settings') renderPasswords();
+});
+$('sp-not-now').addEventListener('click', () => hideSavePrompt());
+$('sp-never').addEventListener('click', async () => {
+  if (!pendingSavePrompt) return;
+  const { host, profileId } = pendingSavePrompt;
+  skippedSites.push({ host, profileId });
+  await saveSkippedSites();
+  hideSavePrompt();
+});
+
+function renderPasswords() {
+  const q = ($('pw-search').value || '').toLowerCase();
+  const items = q ? passwords.filter(p => (p.host || '').toLowerCase().includes(q) || (p.username || '').toLowerCase().includes(q)) : passwords;
+  const list = $('pw-list'); list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = '<div class="placeholder" style="padding: 16px; height: auto;"><div>' + escapeHtml(i18n.t('pw.empty')) + '</div></div>';
+    return;
+  }
+  for (const p of items.slice(0, 1000)) {
+    const row = document.createElement('div');
+    row.className = 'entry';
+    const prof = profileById(p.profileId);
+    row.innerHTML =
+      '<div class="e-cover">' + domainLetter('https://' + p.host) + '</div>' +
+      '<div class="e-text">' +
+        '<div class="e-title">' + escapeHtml(p.host) + ' <span style="color:var(--text-secondary);font-weight:400;font-size:11px;"> · ' + escapeHtml(p.username || '') + '</span></div>' +
+        '<div class="e-url">' + escapeHtml(prof ? prof.name : '-') + ' · <span class="pw-val">••••••••</span></div>' +
+      '</div>' +
+      '<div class="e-actions">' +
+        '<button data-act="reveal">' + escapeHtml(i18n.t('pw.reveal')) + '</button>' +
+        '<button data-act="copy">' + escapeHtml(i18n.t('pw.copy')) + '</button>' +
+        '<button data-act="del">' + escapeHtml(i18n.t('pw.delete')) + '</button>' +
+      '</div>';
+    const valSpan = row.querySelector('.pw-val');
+    row.querySelector('[data-act="reveal"]').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const btn = ev.currentTarget;
+      const showing = valSpan.dataset.shown === '1';
+      if (showing) { valSpan.textContent = '••••••••'; valSpan.dataset.shown = '0'; btn.textContent = i18n.t('pw.reveal'); }
+      else { valSpan.textContent = p.password; valSpan.dataset.shown = '1'; btn.textContent = i18n.t('pw.hide'); }
+    });
+    row.querySelector('[data-act="copy"]').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      navigator.clipboard.writeText(p.password);
+    });
+    row.querySelector('[data-act="del"]').addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const i = passwords.indexOf(p);
+      if (i >= 0) passwords.splice(i, 1);
+      await savePasswords(); renderPasswords();
+    });
+    list.appendChild(row);
+  }
+}
+$('pw-search').addEventListener('input', renderPasswords);
+
+// ----- Manual add-password flow -----
+function openAddPasswordModal() {
+  const t = activeTab();
+  const preHost = (t && t.currentHost) ? t.currentHost : (t ? hostOf(t.url) : '');
+  $('ap-add-host').value = preHost;
+  $('ap-add-user').value = '';
+  $('ap-add-pw').value = '';
+  // Populate profiles dropdown
+  const sel = $('ap-add-profile'); sel.innerHTML = '';
+  for (const p of profiles) {
+    const opt = document.createElement('option');
+    opt.value = p.id; opt.textContent = p.name;
+    if (p.id === settings.defaultProfileId) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  $('add-pw-prompt').style.display = 'block';
+  setTimeout(() => $('ap-add-user').focus(), 30);
+}
+function closeAddPasswordModal() { $('add-pw-prompt').style.display = 'none'; }
+$('pw-add-btn').addEventListener('click', openAddPasswordModal);
+$('ap-add-cancel').addEventListener('click', closeAddPasswordModal);
+$('ap-add-save').addEventListener('click', async () => {
+  const host = ($('ap-add-host').value || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  const username = $('ap-add-user').value;
+  const password = $('ap-add-pw').value;
+  const profileId = $('ap-add-profile').value;
+  if (!host || !password) return;
+  const idx = passwords.findIndex(p => p.host === host && p.profileId === profileId && p.username === username);
+  const entry = { host, username, password, profileId, updatedAt: Date.now() };
+  if (idx >= 0) passwords[idx] = entry; else passwords.unshift(entry);
+  await savePasswords();
+  closeAddPasswordModal();
+  renderPasswords();
+});
+
+function updateCounts() {
+  if (currentRoute === 'favorites') renderFavorites();
+  else if (currentRoute === 'recent') renderRecent();
+  else if (currentRoute === 'windows') renderWindows();
+}
+
+// ---------- Notes ----------
+function renderNotes() {
+  const q = ($('notes-search').value || '').toLowerCase();
+  const items = q ? notes.filter(n => (n.title || '').toLowerCase().includes(q) || (n.body || '').toLowerCase().includes(q)) : notes;
+  const list = $('notes-list');
+  list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = '<div class="placeholder" style="padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('notes.empty_list')) + '</div></div>';
+  } else {
+    for (const n of items) {
+      const item = document.createElement('div');
+      item.className = 'note-item' + (n.id === activeNoteId ? ' active' : '');
+      item.innerHTML =
+        '<div class="n-title">' + escapeHtml(n.title || i18n.t('notes.untitled')) + '</div>' +
+        '<div class="n-preview">' + escapeHtml((n.body || '').slice(0, 80)) + '</div>' +
+        '<div class="n-date">' + escapeHtml(formatTime(n.updatedAt)) + '</div>';
+      item.addEventListener('click', () => { activeNoteId = n.id; renderNotes(); });
+      list.appendChild(item);
+    }
+  }
+  renderNoteEditor();
+}
+function renderNoteEditor() {
+  const editor = $('notes-editor');
+  const note = notes.find(n => n.id === activeNoteId);
+  if (!note) {
+    editor.innerHTML = '<div class="notes-empty-editor">' + escapeHtml(i18n.t('notes.empty_editor')) + '</div>';
+    return;
+  }
+  editor.innerHTML = '';
+  const titleEl = document.createElement('input');
+  titleEl.className = 'e-title';
+  titleEl.placeholder = i18n.t('notes.placeholder_title');
+  titleEl.value = note.title || '';
+  const bodyEl = document.createElement('textarea');
+  bodyEl.className = 'e-body';
+  bodyEl.placeholder = i18n.t('notes.placeholder_body');
+  bodyEl.value = note.body || '';
+  const footer = document.createElement('div');
+  footer.className = 'e-footer';
+  const updated = document.createElement('span');
+  updated.textContent = formatTime(note.updatedAt);
+  const delBtn = document.createElement('button');
+  delBtn.textContent = i18n.t('tasks.delete');
+  footer.appendChild(updated); footer.appendChild(delBtn);
+  editor.appendChild(titleEl); editor.appendChild(bodyEl); editor.appendChild(footer);
+
+  const saveIncremental = () => {
+    note.title = titleEl.value;
+    note.body = bodyEl.value;
+    note.updatedAt = Date.now();
+    clearTimeout(notesSaveTimer);
+    notesSaveTimer = setTimeout(() => {
+      saveNotes();
+      updated.textContent = formatTime(note.updatedAt);
+      const activeItem = $('notes-list').querySelector('.note-item.active');
+      if (activeItem) {
+        activeItem.querySelector('.n-title').textContent = note.title || i18n.t('notes.untitled');
+        activeItem.querySelector('.n-preview').textContent = (note.body || '').slice(0, 80);
+        activeItem.querySelector('.n-date').textContent = formatTime(note.updatedAt);
+      }
+    }, 400);
+  };
+  titleEl.addEventListener('input', saveIncremental);
+  bodyEl.addEventListener('input', saveIncremental);
+  delBtn.addEventListener('click', async () => {
+    if (!confirm(i18n.t('notes.delete_confirm'))) return;
+    notes = notes.filter(n => n.id !== note.id);
+    activeNoteId = null;
+    await saveNotes();
+    renderNotes();
+  });
+}
+$('notes-new-btn').addEventListener('click', async () => {
+  const n = { id: 'n_' + Date.now().toString(36), title: '', body: '', updatedAt: Date.now(), createdAt: Date.now() };
+  notes.unshift(n);
+  activeNoteId = n.id;
+  await saveNotes();
+  renderNotes();
+});
+$('notes-search').addEventListener('input', renderNotes);
+
+// ---------- Quick Note FAB ----------
+function openQuickNote() {
+  $('quick-note-popover').classList.add('visible');
+  setTimeout(() => $('qn-title').focus(), 50);
+}
+$('quick-note-fab').addEventListener('click', openQuickNote);
+$('qn-close').addEventListener('click', () => $('quick-note-popover').classList.remove('visible'));
+$('qn-save').addEventListener('click', async () => {
+  const title = $('qn-title').value.trim();
+  const body = $('qn-body').value.trim();
+  if (title || body) {
+    const n = { id: 'n_' + Date.now().toString(36), title, body, updatedAt: Date.now(), createdAt: Date.now() };
+    notes.unshift(n);
+    await saveNotes();
+    if (currentRoute === 'notes') renderNotes();
+  }
+  $('qn-title').value = '';
+  $('qn-body').value = '';
+  $('quick-note-popover').classList.remove('visible');
+});
+window.addEventListener('keydown', (e) => {
+  if (e.metaKey && e.shiftKey && (e.key === 'n' || e.key === 'N')) {
+    e.preventDefault();
+    openQuickNote();
+  }
+});
+
+// ---------- Tasks ----------
+function renderTasks() {
+  const pending = tasks.filter(t => !t.done).sort((a, b) => {
+    if (a.dueAt && !b.dueAt) return -1;
+    if (!a.dueAt && b.dueAt) return 1;
+    if (a.dueAt && b.dueAt) return a.dueAt - b.dueAt;
+    return (b.createdAt || 0) - (a.createdAt || 0);
+  });
+  const done = tasks.filter(t => t.done).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+  renderTaskSection($('tasks-pending'), pending, true);
+  renderTaskSection($('tasks-done'), done, false);
+}
+function renderTaskSection(container, items, emptyable) {
+  container.innerHTML = '';
+  if (!items.length) {
+    if (emptyable) container.innerHTML = '<div class="placeholder" style="padding: 16px; height: auto;"><div>' + escapeHtml(i18n.t('tasks.empty')) + '</div></div>';
+    return;
+  }
+  for (const t of items) container.appendChild(taskRowEl(t));
+}
+function taskRowEl(t) {
+  const row = document.createElement('div');
+  row.className = 'task-row' + (t.done ? ' done' : '') + (t.fired && !t.done ? ' fired' : '');
+  const overdue = t.dueAt && !t.done && t.dueAt < Date.now();
+  const dueText = t.dueAt ? formatTime(t.dueAt) : i18n.t('tasks.set_due');
+  row.innerHTML =
+    '<div class="task-check" data-act="toggle"></div>' +
+    '<div class="t-text" data-act="edit">' + escapeHtml(t.text) + '</div>' +
+    '<div class="t-due' + (overdue ? ' overdue' : '') + '" data-act="due">' + escapeHtml(dueText) + (overdue ? ' · ' + i18n.t('tasks.overdue') : '') + '</div>' +
+    '<div class="t-actions">' +
+      '<button data-act="delete">' + escapeHtml(i18n.t('tasks.delete')) + '</button>' +
+    '</div>';
+  row.querySelector('[data-act="toggle"]').addEventListener('click', async () => {
+    t.done = !t.done;
+    t.completedAt = t.done ? Date.now() : null;
+    t.fired = false;
+    await saveTasks();
+    if (t.done) await ipcRenderer.invoke('task:cancel', t.id);
+    else if (t.dueAt) await ipcRenderer.invoke('task:schedule', t);
+    renderTasks();
+  });
+  row.querySelector('[data-act="edit"]').addEventListener('click', async () => {
+    const nt = prompt(i18n.t('tasks.edit') + ':', t.text);
+    if (nt != null && nt.trim()) { t.text = nt.trim(); await saveTasks(); renderTasks(); }
+  });
+  row.querySelector('[data-act="due"]').addEventListener('click', async () => {
+    const cur = t.dueAt ? new Date(t.dueAt) : new Date(Date.now() + 3600000);
+    const pad = (n) => (n < 10 ? '0' + n : '' + n);
+    const fmt = cur.getFullYear() + '-' + pad(cur.getMonth()+1) + '-' + pad(cur.getDate()) + ' ' + pad(cur.getHours()) + ':' + pad(cur.getMinutes());
+    const inp = prompt(i18n.t('tasks.due') + ' (YYYY-MM-DD HH:MM):', fmt);
+    if (inp === null) return;
+    if (inp.trim() === '') { t.dueAt = null; await saveTasks(); await ipcRenderer.invoke('task:cancel', t.id); renderTasks(); return; }
+    const parsed = new Date(inp.replace(' ', 'T'));
+    if (!isNaN(parsed.getTime())) {
+      t.dueAt = parsed.getTime();
+      t.fired = false;
+      await saveTasks();
+      await ipcRenderer.invoke('task:schedule', t);
+      renderTasks();
+    }
+  });
+  row.querySelector('[data-act="delete"]').addEventListener('click', async () => {
+    if (!confirm(i18n.t('tasks.delete_confirm'))) return;
+    tasks = tasks.filter(x => x.id !== t.id);
+    await saveTasks();
+    await ipcRenderer.invoke('task:cancel', t.id);
+    renderTasks();
+  });
+  return row;
+}
+$('task-new-text').addEventListener('keydown', async (e) => {
+  if (e.key === 'Enter') {
+    const text = e.target.value.trim();
+    if (!text) return;
+    const t = { id: 't_' + Date.now().toString(36), text, done: false, createdAt: Date.now() };
+    tasks.unshift(t);
+    await saveTasks();
+    e.target.value = '';
+    renderTasks();
+  }
+});
+ipcRenderer.on('task:fired', (_e, taskId) => {
+  const t = tasks.find(x => x.id === taskId);
+  if (t) { t.fired = true; saveTasks(); if (currentRoute === 'tasks') renderTasks(); }
+});
+
+// ---------- Library ----------
+let libFilter = 'all';
+let libSort = 'last_played';
+
+function makeLibraryItem(url, title, extra) {
+  return Object.assign({
+    id: 'b_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    url, title: title || hostOf(url),
+    addedAt: Date.now(),
+    favorite: true,
+    tags: [],
+    notes: '',
+    playCount: 0,
+    lastPlayedAt: null,
+  }, extra || {});
+}
+function addToLibrary(url, title) {
+  if (!url) return;
+  const existing = bookmarks.find(b => b.url === url);
+  if (existing) return;
+  bookmarks.unshift(makeLibraryItem(url, title));
+  saveBookmarks();
+  updateBookmarkStar();
+  if (currentRoute === 'library') renderLibrary();
+  else if (currentRoute === 'favorites') renderFavorites();
+  else if (currentRoute === 'home') renderHomeFavorites();
+}
+function playLibraryItem(item) {
+  item.playCount = (item.playCount || 0) + 1;
+  item.lastPlayedAt = Date.now();
+  saveBookmarks();
+  openUrl(item.url);
+}
+function renderLibrary() {
+  const q = ($('lib-search').value || '').toLowerCase();
+  let items = bookmarks.slice();
+  if (libFilter === 'favorites') items = items.filter(b => b.favorite !== false);
+  if (q) items = items.filter(b =>
+    (b.title || '').toLowerCase().includes(q) ||
+    (b.url || '').toLowerCase().includes(q) ||
+    (b.tags || []).join(',').toLowerCase().includes(q) ||
+    (b.notes || '').toLowerCase().includes(q)
+  );
+  items.sort((a, b) => {
+    if (libSort === 'last_played') return (b.lastPlayedAt || 0) - (a.lastPlayedAt || 0);
+    if (libSort === 'most_played') return (b.playCount || 0) - (a.playCount || 0);
+    if (libSort === 'added') return (b.addedAt || 0) - (a.addedAt || 0);
+    if (libSort === 'title') return (a.title || '').localeCompare(b.title || '');
+    return 0;
+  });
+  $('lib-count').textContent = items.length + ' ' + i18n.t(items.length === 1 ? 'common.item' : 'common.items');
+  const grid = $('lib-grid');
+  grid.innerHTML = '';
+  if (!items.length) {
+    grid.innerHTML = '<div class="placeholder" style="grid-column:1/-1;padding:20px;height:auto;"><div>' + escapeHtml(i18n.t('lib.empty')) + '</div></div>';
+    return;
+  }
+  for (const it of items.slice(0, 1000)) grid.appendChild(libCardEl(it));
+}
+function libCardEl(item) {
+  const el = document.createElement('div');
+  el.className = 'lib-card';
+  const host = hostOf(item.url);
+  const lastPlayed = item.lastPlayedAt ? formatTime(item.lastPlayedAt) : i18n.t('lib.never_played');
+  const plays = item.playCount || 0;
+  const isFav = item.favorite !== false;
+  const tagsHtml = (item.tags || []).slice(0, 4).map(t => '<span class="lc-tag">' + escapeHtml(t) + '</span>').join('');
+  el.innerHTML =
+    '<div class="lc-cover">' + domainLetter(item.url) + '</div>' +
+    '<div class="lc-fav' + (isFav ? ' on' : '') + '">' + (isFav ? '❤' : '♡') + '</div>' +
+    '<div class="lc-title">' + escapeHtml(item.title || host) + '</div>' +
+    '<div class="lc-meta">' + escapeHtml(host) + ' · ' + plays + ' ' + escapeHtml(i18n.t('lib.plays')) + ' · ' + escapeHtml(lastPlayed) + '</div>' +
+    '<div class="lc-tags">' + tagsHtml + '</div>' +
+    '<div class="lc-actions">' +
+      '<button data-act="play" class="primary">' + escapeHtml(i18n.t('lib.play')) + '</button>' +
+      '<button data-act="edit">' + escapeHtml(i18n.t('lib.edit')) + '</button>' +
+    '</div>';
+  el.addEventListener('click', (ev) => {
+    if (ev.target.closest('.lc-actions') || ev.target.closest('.lc-fav')) return;
+    playLibraryItem(item);
+  });
+  el.querySelector('.lc-fav').addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    item.favorite = item.favorite === false;
+    await saveBookmarks();
+    renderLibrary();
+    updateBookmarkStar();
+  });
+  el.querySelector('[data-act="play"]').addEventListener('click', (ev) => { ev.stopPropagation(); playLibraryItem(item); });
+  el.querySelector('[data-act="edit"]').addEventListener('click', (ev) => { ev.stopPropagation(); openLibEditor(item); });
+  return el;
+}
+
+// Library edit modal
+let editingLibItemId = null;
+function openLibEditor(item) {
+  editingLibItemId = item.id || item.url;
+  $('le-title').value = item.title || '';
+  $('le-tags').value = (item.tags || []).join(', ');
+  $('le-notes').value = item.notes || '';
+  $('lib-edit').style.display = 'block';
+  setTimeout(() => $('le-title').focus(), 30);
+}
+function closeLibEditor() { $('lib-edit').style.display = 'none'; editingLibItemId = null; }
+$('le-cancel').addEventListener('click', closeLibEditor);
+$('le-save').addEventListener('click', async () => {
+  if (!editingLibItemId) return;
+  const item = bookmarks.find(b => (b.id || b.url) === editingLibItemId);
+  if (!item) { closeLibEditor(); return; }
+  item.title = $('le-title').value.trim() || item.title;
+  item.tags = $('le-tags').value.split(',').map(s => s.trim()).filter(Boolean);
+  item.notes = $('le-notes').value;
+  await saveBookmarks();
+  closeLibEditor();
+  renderLibrary();
+  if (currentRoute === 'home') renderHomeFavorites();
+});
+$('le-delete').addEventListener('click', async () => {
+  if (!editingLibItemId) return;
+  if (!confirm(i18n.t('lib.remove_confirm'))) return;
+  bookmarks = bookmarks.filter(b => (b.id || b.url) !== editingLibItemId);
+  await saveBookmarks();
+  closeLibEditor();
+  renderLibrary();
+  if (currentRoute === 'home') renderHomeFavorites();
+  updateBookmarkStar();
+});
+$('lib-search').addEventListener('input', renderLibrary);
+$('lib-filter').addEventListener('change', (e) => { libFilter = e.target.value; renderLibrary(); });
+$('lib-sort').addEventListener('change', (e) => { libSort = e.target.value; renderLibrary(); });
+
+// ---------- menu/shortcut actions ----------
+ipcRenderer.on('action', (_e, action, arg) => {
+  const t = activeTab();
+  switch (action) {
+    case 'new-tab': createTab(arg || homeUrl); break;
+    case 'close-tab': if (t) closeTab(t.id); break;
+    case 'detach-tab': if (t) detachTab(t.id); break;
+    case 'next-tab': {
+      if (tabs.length < 2) return;
+      const i = tabs.findIndex(x => x.id === activeId);
+      activateTab(tabs[(i + 1) % tabs.length].id); setRoute('browser'); break;
+    }
+    case 'prev-tab': {
+      if (tabs.length < 2) return;
+      const i = tabs.findIndex(x => x.id === activeId);
+      activateTab(tabs[(i - 1 + tabs.length) % tabs.length].id); setRoute('browser'); break;
+    }
+    case 'reload': if (t) t.webview.reload(); break;
+    case 'toggle-history': setRoute('recent'); break;
+    case 'toggle-bookmarks': setRoute('favorites'); break;
+    case 'focus-url': $topUrl.focus(); break;
+    case 'zoom-in': bumpZoom(0.1); break;
+    case 'zoom-out': bumpZoom(-0.1); break;
+    case 'zoom-reset': resetZoom(); break;
+    case 'fit-window': fitZoom(); break;
+    case 'toggle-sidebar': setSidebar(!document.body.classList.contains('sidebar-collapsed')); break;
+    case 'toggle-game-mode': setGameMode(!document.body.classList.contains('game-mode')); break;
+    case 'goto-tasks': setRoute('tasks'); break;
+    case 'inspect-webview': { if (t) { try { t.webview.openDevTools(); } catch (e) {} } break; }
+    case 'new-window': ipcRenderer.invoke('window:open', null, windowProfileId); break;
+  }
+});
+
+// ---------- boot ----------
+(async () => {
+  await loadStores();
+  applyLanguage();
+  refreshProfileChip();
+  updateSpeedIndicator();
+  setSidebar(!!settings.sidebarCollapsed);
+  document.body.classList.toggle('hide-quick-note', settings.showQuickNote === false);
+  const init = await ipcRenderer.invoke('app:init');
+  windowProfileId = (init && init.profileId) || settings.defaultProfileId || (profiles[0] && profiles[0].id);
+  refreshProfileChip();
+  if (init && init.initialUrl) createTab(init.initialUrl);
+  else setRoute('home');
+})();

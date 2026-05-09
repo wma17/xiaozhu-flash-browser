@@ -1,0 +1,11 @@
+.DS_Store
+*.log
+*.dylib
+*.bak-*
+*.old-failed
+node_modules/
+dist/
+build/
+*.app/
+app/plugins/PepperFlashPlayer.plugin/
+app/plugins/PepperFlashPlayerSpeed.plugin/

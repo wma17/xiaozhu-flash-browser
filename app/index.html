@@ -1,0 +1,1115 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>小竹Flash浏览器</title>
+  <style>
+    :root {
+      --cream-bg:     #F7E8D1;
+      --cream-bg-2:   #F1DEC0;
+      --soft-wheat:   #FFD8A6;
+      --main-orange:  #F4A23C;
+      --deep-orange:  #C86B2A;
+      --warm-brown:   #8B4E2A;
+      --dark-brown:   #5B4636;
+      --panel-white:  #FFF8EC;
+      --panel-white-2:#FFFDF6;
+      --text-primary: #3A2A1F;
+      --text-secondary: #7A6654;
+      --border:       rgba(139, 78, 42, 0.18);
+      --border-strong:rgba(139, 78, 42, 0.32);
+      --shadow:       0 4px 14px rgba(139, 78, 42, 0.10);
+      --shadow-lg:    0 10px 28px rgba(139, 78, 42, 0.14);
+      --sidebar-w:    224px;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: var(--cream-bg);
+      color: var(--text-primary);
+      font: 13px "PingFang SC", "SF Pro Text", -apple-system, "Hiragino Sans", "Helvetica Neue", sans-serif;
+      overflow: hidden;
+      letter-spacing: 0.01em;
+    }
+    body::before {
+      content: "";
+      position: fixed; inset: 0;
+      background:
+        radial-gradient(1000px 520px at 0% 0%, rgba(255, 216, 166, 0.5), transparent 60%),
+        radial-gradient(1100px 600px at 100% 100%, rgba(244, 162, 60, 0.12), transparent 60%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    #app { position: relative; z-index: 1; display: flex; flex-direction: column; height: 100%; }
+
+    /* ========== Top bar ========== */
+    #topbar {
+      display: flex; align-items: center; gap: 8px;
+      height: 40px; padding: 0 12px 0 76px;
+      background: var(--panel-white);
+      border-bottom: 1px solid var(--border);
+      -webkit-app-region: drag;
+      flex-shrink: 0;
+    }
+    #topbar > * { -webkit-app-region: no-drag; }
+    .nav-btn {
+      width: 28px; height: 28px; line-height: 26px; text-align: center;
+      border-radius: 8px; color: var(--warm-brown);
+      background: transparent; cursor: default; font-size: 15px;
+      transition: background 120ms ease, color 120ms ease;
+      flex-shrink: 0;
+    }
+    .nav-btn:hover:not(.disabled) { background: var(--soft-wheat); color: var(--dark-brown); }
+    .nav-btn.disabled { opacity: .3; }
+    #url {
+      flex: 1; height: 28px; padding: 0 12px;
+      background: var(--cream-bg-2); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: 10px;
+      outline: none; font-size: 13px;
+    }
+    #url::placeholder { color: var(--text-secondary); }
+    #url:focus { background: #fff; border-color: var(--main-orange); }
+
+    #bookmark-star { color: var(--warm-brown); font-size: 16px; }
+    #bookmark-star.active { color: var(--main-orange); }
+
+    #profile-chip {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 10px;
+      background: var(--cream-bg-2); color: var(--warm-brown);
+      cursor: default; font-size: 11px;
+      border: 1px solid var(--border);
+    }
+    #profile-chip:hover { background: var(--soft-wheat); color: var(--dark-brown); }
+    #profile-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--main-orange); }
+
+    /* ========== Layout ========== */
+    #layout { flex: 1; display: flex; min-height: 0; }
+
+    /* Sidebar */
+    #sidebar {
+      width: var(--sidebar-w); flex-shrink: 0;
+      background: var(--panel-white);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      padding: 14px 12px;
+      transition: width 200ms ease, padding 200ms ease, border-right-color 200ms ease;
+      overflow: hidden;
+    }
+    body.sidebar-collapsed #sidebar {
+      width: 0; padding-left: 0; padding-right: 0; border-right-color: transparent;
+    }
+    body.sidebar-collapsed #sidebar * { opacity: 0; pointer-events: none; }
+    #brand {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 6px 12px 6px;
+    }
+    #brand .badge {
+      width: 44px; height: 44px; border-radius: 12px;
+      background: url(assets/badge.png) center/cover no-repeat;
+      flex-shrink: 0;
+      filter: drop-shadow(0 2px 4px rgba(139, 78, 42, 0.18));
+    }
+    #brand .text .name { font-size: 13px; font-weight: 700; color: var(--dark-brown); }
+    #brand .text .sub  { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+    #nav-list { margin-top: 8px; flex: 1; overflow: auto; }
+    #nav-list::-webkit-scrollbar { width: 0; }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; margin: 2px 0; border-radius: 10px;
+      cursor: default; color: var(--text-primary); white-space: nowrap;
+    }
+    .nav-item:hover { background: rgba(255, 216, 166, 0.55); }
+    .nav-item.active { background: var(--soft-wheat); color: var(--dark-brown); font-weight: 600; }
+    .nav-item .icon {
+      width: 22px; height: 22px;
+      background-size: contain; background-repeat: no-repeat; background-position: center;
+      flex-shrink: 0;
+    }
+    .nav-item[data-route="home"] .icon      { background-image: url(assets/nav_home.png); }
+    .nav-item[data-route="library"] .icon   { background-image: url(assets/nav_library.png); }
+    .nav-item[data-route="favorites"] .icon { background-image: url(assets/nav_favorites.png); }
+    .nav-item[data-route="recent"] .icon    { background-image: url(assets/nav_recent.png); }
+    .nav-item[data-route="windows"] .icon   { background-image: url(assets/nav_windows.png); }
+    .nav-item[data-route="profiles"] .icon  { background-image: url(assets/nav_profiles.png); }
+    .nav-item[data-route="settings"] .icon  { background-image: url(assets/nav_settings.png); }
+    .nav-item[data-route="about"] .icon     { background-image: url(assets/nav_about.png); }
+    .nav-item .icon.emoji {
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+      background: linear-gradient(135deg, var(--soft-wheat), var(--main-orange) 140%);
+      border-radius: 6px;
+      color: var(--dark-brown);
+    }
+
+    .nav-section { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); margin: 12px 12px 4px 12px; }
+
+    #sidebar-footer {
+      margin-top: 10px; padding: 10px; border-top: 1px solid var(--border);
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+    }
+    #sidebar-footer .mascot {
+      width: 120px; height: 120px;
+      background: url(assets/mascot.png) center/contain no-repeat;
+    }
+    #sidebar-footer .bubble {
+      font-size: 11px; color: var(--text-secondary); text-align: center;
+      background: var(--cream-bg-2); padding: 6px 10px; border-radius: 10px;
+      border: 1px dashed var(--border);
+    }
+
+    /* Main */
+    #main { flex: 1; min-width: 0; position: relative; overflow: hidden; }
+    .route { position: absolute; inset: 0; display: none; overflow: auto; padding: 28px 36px 40px 36px; }
+    .route.active { display: block; }
+
+    /* Reusable */
+    .section-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin: 24px 0 10px 0;
+    }
+    .section-head .title { font-size: 15px; font-weight: 700; color: var(--dark-brown); }
+    .section-head .link { font-size: 12px; color: var(--deep-orange); cursor: default; }
+    .section-head .link:hover { text-decoration: underline; }
+
+    /* Home */
+    .greet { font-size: 24px; font-weight: 700; color: var(--dark-brown); }
+    .greet .dot { color: var(--main-orange); }
+    .greet-sub { color: var(--text-secondary); margin-top: 4px; font-size: 13px; }
+
+    .grid {
+      display: grid; gap: 14px;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    }
+    .card {
+      background: var(--panel-white-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px;
+      display: flex; flex-direction: column; gap: 8px;
+      cursor: default;
+      transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+    }
+    .card:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: var(--border-strong); }
+    .card .cover {
+      width: 100%; aspect-ratio: 16/10; border-radius: 10px;
+      background: linear-gradient(135deg, var(--soft-wheat), var(--main-orange) 140%);
+      position: relative; overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .card .cover .letter { font-size: 40px; font-weight: 900; color: rgba(91, 70, 54, 0.35); text-shadow: 0 2px 2px rgba(255,255,255,0.35); }
+    .card .title { font-size: 13px; font-weight: 700; color: var(--dark-brown); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card .meta  { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .quick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+    .quick {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--panel-white-2); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px; cursor: default;
+      transition: background 120ms ease, transform 120ms ease;
+    }
+    .quick:hover { background: var(--soft-wheat); transform: translateY(-1px); }
+    .quick .q-title { font-size: 13px; font-weight: 700; color: var(--dark-brown); }
+    .quick .q-sub { font-size: 11px; color: var(--text-secondary); }
+    .quick .q-tag {
+      width: 40px; height: 40px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; color: #fff;
+      background: linear-gradient(135deg, var(--main-orange), var(--deep-orange));
+      font-size: 13px;
+    }
+
+    /* Window/entry rows */
+    .winrow {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 12px; background: var(--panel-white-2); border: 1px solid var(--border); border-radius: 12px;
+      margin-bottom: 8px; cursor: default;
+    }
+    .winrow:hover { background: var(--panel-white); }
+    .winrow .w-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .winrow .w-url   { color: var(--text-secondary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .winrow .tag     { font-size: 11px; padding: 2px 8px; border-radius: 8px; background: var(--soft-wheat); color: var(--dark-brown); display: inline-flex; align-items: center; gap: 6px; }
+    .winrow .tag .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .winrow .btn     { font-size: 11px; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--border); cursor: default; background: var(--panel-white); color: var(--dark-brown); }
+    .winrow .btn:hover { background: var(--soft-wheat); }
+    .winrow .btn.danger:hover { background: var(--deep-orange); color: #fff; border-color: transparent; }
+
+    .list-head { display: flex; align-items: baseline; gap: 12px; }
+    .list-head .title { font-size: 22px; font-weight: 700; color: var(--dark-brown); }
+    .list-head .count { color: var(--text-secondary); font-size: 12px; }
+    .list-head .subtitle { color: var(--text-secondary); font-size: 12px; }
+    .list-search { margin: 14px 0 18px 0; }
+    .list-search input {
+      width: 100%; max-width: 420px; height: 32px; padding: 0 14px;
+      background: var(--panel-white-2); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: 10px; outline: none; font: inherit;
+    }
+    .list-search input:focus { background: #fff; border-color: var(--main-orange); }
+
+    .entry {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 12px; margin-bottom: 6px;
+      background: var(--panel-white-2); border: 1px solid var(--border); border-radius: 10px;
+      cursor: default;
+    }
+    .entry:hover { background: var(--panel-white); }
+    .entry .e-cover {
+      width: 40px; height: 40px; border-radius: 8px; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--soft-wheat), var(--main-orange) 140%);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; color: rgba(91, 70, 54, 0.5);
+    }
+    .entry .e-text { flex: 1; min-width: 0; }
+    .entry .e-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .entry .e-url { color: var(--text-secondary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .entry .e-actions { display: flex; gap: 4px; opacity: 0; }
+    .entry:hover .e-actions { opacity: 1; }
+    .entry .e-actions button {
+      background: var(--panel-white); border: 1px solid var(--border); color: var(--warm-brown);
+      cursor: default; font-size: 12px; padding: 4px 10px; border-radius: 8px;
+    }
+    .entry .e-actions button:hover { background: var(--main-orange); color: #fff; border-color: transparent; }
+
+    /* Placeholder */
+    .placeholder {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      height: 100%; color: var(--text-secondary); text-align: center; padding: 40px;
+    }
+    .placeholder .ph-icon { width: 120px; height: 120px; opacity: 0.7; margin-bottom: 16px; background-size: contain; background-repeat: no-repeat; background-position: center; }
+    .placeholder h3 { margin: 0 0 4px 0; color: var(--dark-brown); font-size: 18px; }
+
+    /* Browser */
+    #route-browser { padding: 0; background: var(--cream-bg); }
+    #tab-strip {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 10px; background: var(--panel-white);
+      border-bottom: 1px solid var(--border);
+      height: 34px; flex-shrink: 0;
+    }
+    #tab-strip .tab {
+      display: flex; align-items: center; gap: 8px;
+      padding: 3px 8px; border-radius: 8px;
+      background: var(--cream-bg-2); color: var(--text-secondary);
+      max-width: 220px; min-width: 96px; cursor: default;
+      border: 1px solid transparent;
+    }
+    #tab-strip .tab:hover { background: var(--soft-wheat); color: var(--dark-brown); }
+    #tab-strip .tab.active { background: var(--panel-white-2); color: var(--dark-brown); border-color: var(--border); font-weight: 600; }
+    #tab-strip .tab .t-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+    #tab-strip .tab .spinner { width: 10px; height: 10px; border: 2px solid var(--main-orange); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; display: none; }
+    #tab-strip .tab.loading .spinner { display: inline-block; }
+    #tab-strip .tab .pdot { width: 6px; height: 6px; border-radius: 50%; background: var(--main-orange); }
+    #tab-strip .tab .detach, #tab-strip .tab .close {
+      width: 16px; height: 16px; line-height: 14px; text-align: center;
+      border-radius: 50%; font-size: 11px; opacity: 0; color: var(--text-secondary);
+    }
+    #tab-strip .tab:hover .detach, #tab-strip .tab:hover .close, #tab-strip .tab.active .close { opacity: 1; }
+    #tab-strip .tab .detach:hover { background: var(--soft-wheat); color: var(--dark-brown); }
+    #tab-strip .tab .close:hover { background: var(--deep-orange); color: #fff; }
+    #tab-strip .spacer { flex: 1; }
+    #tab-strip .zc { display: flex; align-items: center; gap: 2px; margin-left: 8px; }
+    #tab-strip .zoom-ind { min-width: 64px; text-align: center; font-size: 11px; color: var(--text-secondary); padding: 3px 10px; background: var(--cream-bg-2); border-radius: 8px; border: 1px solid var(--border); cursor: default; user-select: none; }
+    #tab-strip .zoom-ind:hover { background: var(--soft-wheat); color: var(--dark-brown); border-color: var(--border-strong); }
+    #tab-strip .speed-ind { min-width: 58px; text-align: center; font-size: 11px; color: var(--dark-brown); padding: 3px 10px; background: #EAF4EA; border-radius: 8px; border: 1px solid rgba(76, 122, 90, .28); cursor: default; user-select: none; }
+    #tab-strip .speed-ind:hover { background: #D7ECD8; border-color: rgba(76, 122, 90, .5); }
+    #tab-strip .speed-ind.hot { background: #FFE8A8; border-color: rgba(200, 107, 42, .38); color: var(--deep-orange); }
+    #tab-strip #new-tab-btn { padding: 4px 10px; border-radius: 8px; background: var(--cream-bg-2); color: var(--warm-brown); font-size: 16px; border: 1px solid var(--border); }
+    #tab-strip #new-tab-btn:hover { background: var(--main-orange); color: #fff; border-color: transparent; }
+    #tab-strip #game-mode-btn { padding: 4px 9px; border-radius: 8px; background: var(--cream-bg-2); color: var(--warm-brown); font-size: 13px; border: 1px solid var(--border); cursor: default; }
+    #tab-strip #game-mode-btn:hover { background: #D7ECD8; border-color: rgba(76, 122, 90, .5); color: #31593B; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #webviews-container {
+      position: absolute; left: 0; right: 0; bottom: 0; top: 34px;
+      background: #fff;
+    }
+    webview { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
+    webview.active { display: flex; }
+
+    body.game-mode #topbar { height: 0; padding-top: 0; padding-bottom: 0; border-bottom: 0; overflow: hidden; }
+    body.game-mode #sidebar { width: 0; padding-left: 0; padding-right: 0; border-right-color: transparent; }
+    body.game-mode #sidebar * { opacity: 0; pointer-events: none; }
+    body.game-mode #tab-strip { height: 28px; padding: 3px 8px; }
+    body.game-mode #tab-list .tab:not(.active), body.game-mode #new-tab-btn { display: none; }
+    body.game-mode #tab-strip .tab.active { max-width: 260px; min-width: 140px; padding: 2px 8px; }
+    body.game-mode #tab-strip .zc .nav-btn,
+    body.game-mode #tab-strip .zc .zoom-ind { display: none; }
+    body.game-mode #webviews-container { top: 28px; }
+
+    /* Shortcuts */
+    .kbd-hint {
+      font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      padding: 4px 8px;
+      background: var(--cream-bg-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--warm-brown);
+    }
+
+    /* Library */
+    .lib-toolbar { display: flex; gap: 10px; align-items: center; margin: 14px 0 18px 0; flex-wrap: wrap; }
+    .lib-toolbar select {
+      font: inherit; padding: 6px 10px; border-radius: 8px;
+      background: var(--panel-white); border: 1px solid var(--border);
+      color: var(--text-primary); outline: none;
+    }
+    .lib-toolbar .list-search { margin: 0; flex: 1; min-width: 200px; }
+    .lib-grid {
+      display: grid; gap: 14px;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    }
+    .lib-card {
+      background: var(--panel-white-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px;
+      display: flex; flex-direction: column; gap: 8px;
+      cursor: default;
+      transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+      position: relative;
+    }
+    .lib-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: var(--border-strong); }
+    .lib-card .lc-cover {
+      width: 100%; aspect-ratio: 16/10; border-radius: 10px;
+      background: linear-gradient(135deg, var(--soft-wheat), var(--main-orange) 140%);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 42px; color: rgba(91, 70, 54, 0.35);
+      text-shadow: 0 2px 2px rgba(255,255,255,0.35);
+    }
+    .lib-card .lc-fav {
+      position: absolute; top: 16px; right: 16px;
+      width: 28px; height: 28px; border-radius: 50%;
+      background: rgba(255, 255, 255, 0.85);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; color: var(--warm-brown); cursor: default;
+      border: 1px solid var(--border);
+    }
+    .lib-card .lc-fav:hover { background: #fff; }
+    .lib-card .lc-fav.on { color: var(--main-orange); }
+    .lib-card .lc-title { font-size: 13px; font-weight: 700; color: var(--dark-brown); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lib-card .lc-meta { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lib-card .lc-tags { display: flex; flex-wrap: wrap; gap: 4px; min-height: 22px; }
+    .lib-card .lc-tag {
+      font-size: 10px; padding: 2px 8px; border-radius: 6px;
+      background: var(--soft-wheat); color: var(--dark-brown);
+    }
+    .lib-card .lc-actions {
+      display: flex; gap: 4px; margin-top: 4px; opacity: 0;
+      transition: opacity 120ms ease;
+    }
+    .lib-card:hover .lc-actions { opacity: 1; }
+    .lib-card .lc-actions button {
+      font: inherit; font-size: 11px; padding: 4px 10px; border-radius: 8px;
+      background: var(--panel-white); color: var(--warm-brown);
+      border: 1px solid var(--border); cursor: default; flex: 1;
+    }
+    .lib-card .lc-actions button.primary { background: var(--main-orange); color: #fff; border-color: transparent; }
+    .lib-card .lc-actions button.primary:hover { background: var(--deep-orange); }
+    .lib-card .lc-actions button:hover { background: var(--soft-wheat); color: var(--dark-brown); }
+
+    /* About */
+    .about-card {
+      max-width: 520px; margin: 40px auto 0;
+      background: var(--panel-white-2); border: 1px solid var(--border); border-radius: 16px;
+      padding: 28px; display: flex; flex-direction: column; align-items: center; gap: 12px;
+    }
+    .about-card .a-badge { width: 96px; height: 96px; background: url(assets/badge.png) center/contain no-repeat; }
+    .about-card h2 { margin: 0; color: var(--dark-brown); font-size: 20px; }
+    .about-card .ver { color: var(--text-secondary); font-size: 12px; }
+    .about-card p { color: var(--text-secondary); font-size: 13px; line-height: 1.6; margin: 10px 0 0 0; text-align: center; }
+
+    /* Settings */
+    .settings-wrap { max-width: 720px; }
+    .settings-group {
+      background: var(--panel-white-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin-bottom: 14px;
+    }
+    .settings-group h3 { margin: 0 0 12px 0; color: var(--dark-brown); font-size: 14px; letter-spacing: 0.02em; }
+    .settings-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 0; border-top: 1px dashed var(--border);
+    }
+    .settings-row:first-of-type { border-top: 0; }
+    .settings-row .label { font-size: 13px; color: var(--text-primary); }
+    .settings-row .sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+    .settings-row select, .settings-row button {
+      font: inherit;
+      background: var(--panel-white); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 6px 10px; cursor: default;
+    }
+    .settings-row button:hover { background: var(--soft-wheat); }
+    .switch {
+      width: 40px; height: 22px; background: var(--border-strong); border-radius: 12px;
+      position: relative; cursor: default; transition: background 150ms ease;
+    }
+    .switch::after {
+      content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+      border-radius: 50%; background: #fff; transition: left 150ms ease;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .switch.on { background: var(--main-orange); }
+    .switch.on::after { left: 20px; }
+
+    .warn {
+      background: rgba(244, 162, 60, 0.14);
+      border: 1px solid rgba(244, 162, 60, 0.45);
+      color: var(--warm-brown);
+      padding: 10px 12px; border-radius: 10px; font-size: 12px;
+      margin-bottom: 12px; line-height: 1.5;
+    }
+
+    /* Profiles page */
+    .profile-card {
+      background: var(--panel-white-2); border: 1px solid var(--border); border-radius: 14px;
+      padding: 14px; margin-bottom: 10px;
+      display: grid; grid-template-columns: 40px 1fr auto; gap: 14px; align-items: center;
+    }
+    .profile-card .swatch { width: 40px; height: 40px; border-radius: 10px; }
+    .profile-card .pc-name { font-weight: 700; color: var(--dark-brown); display: flex; align-items: center; gap: 8px; }
+    .profile-card .pc-tag { font-size: 10px; padding: 2px 8px; border-radius: 6px; background: var(--soft-wheat); color: var(--dark-brown); }
+    .profile-card .pc-tag.default { background: var(--main-orange); color: #fff; }
+    .profile-card .pc-meta { color: var(--text-secondary); font-size: 11px; margin-top: 4px; }
+    .profile-card .pc-actions { display: flex; gap: 6px; }
+    .profile-card .pc-actions button {
+      font: inherit; padding: 6px 10px; border-radius: 8px;
+      background: var(--panel-white); color: var(--warm-brown);
+      border: 1px solid var(--border); cursor: default;
+    }
+    .profile-card .pc-actions button:hover { background: var(--soft-wheat); color: var(--dark-brown); }
+    .profile-card .pc-actions button.danger:hover { background: var(--deep-orange); color: #fff; border-color: transparent; }
+    .profile-card .pc-actions button.primary { background: var(--main-orange); color: #fff; border-color: transparent; }
+    .profile-card .pc-actions button.primary:hover { background: var(--deep-orange); }
+
+    /* Password save prompt banner */
+    #save-prompt {
+      position: fixed; top: 56px; right: 20px; z-index: 50;
+      background: var(--panel-white-2); border: 1px solid var(--border-strong);
+      border-radius: 14px; padding: 14px 16px;
+      box-shadow: var(--shadow-lg);
+      width: 360px;
+      display: none;
+    }
+    #save-prompt.visible { display: block; }
+    #save-prompt .sp-title { font-weight: 700; color: var(--dark-brown); margin-bottom: 8px; }
+    #save-prompt .sp-site  { font-size: 11px; color: var(--text-secondary); margin-bottom: 10px; word-break: break-all; }
+    #save-prompt .sp-row   { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    #save-prompt .sp-row input {
+      flex: 1; height: 28px; padding: 0 10px;
+      background: var(--panel-white); border: 1px solid var(--border); border-radius: 8px;
+      outline: none; font: inherit; color: var(--text-primary);
+    }
+    #save-prompt .sp-row input:focus { border-color: var(--main-orange); background: #fff; }
+    #save-prompt .sp-row label { width: 70px; font-size: 11px; color: var(--text-secondary); }
+    #save-prompt .sp-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+    #save-prompt .sp-actions button {
+      font: inherit; padding: 6px 12px; border-radius: 8px;
+      background: var(--panel-white); color: var(--warm-brown);
+      border: 1px solid var(--border); cursor: default;
+    }
+    #save-prompt .sp-actions button.primary { background: var(--main-orange); color: #fff; border-color: transparent; }
+    #save-prompt .sp-actions button.primary:hover { background: var(--deep-orange); }
+    #save-prompt .sp-actions button:hover { background: var(--soft-wheat); }
+
+    /* Account picker */
+    #account-picker {
+      position: fixed; top: 56px; right: 20px; z-index: 50;
+      background: var(--panel-white-2); border: 1px solid var(--border-strong);
+      border-radius: 14px; padding: 14px 16px;
+      box-shadow: var(--shadow-lg);
+      width: 320px; display: none;
+    }
+    #account-picker.visible { display: block; }
+    #account-picker .sp-title { font-weight: 700; color: var(--dark-brown); margin-bottom: 8px; }
+    #account-picker .sp-site { font-size: 11px; color: var(--text-secondary); margin-bottom: 10px; word-break: break-all; }
+    #account-picker .ap-list { display: flex; flex-direction: column; gap: 6px; }
+    .ap-account {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; border-radius: 10px;
+      background: var(--panel-white); border: 1px solid var(--border);
+      cursor: default;
+    }
+    .ap-account:hover { background: var(--soft-wheat); border-color: var(--border-strong); }
+    .ap-account .ap-avatar {
+      width: 28px; height: 28px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 11px; font-weight: 700; flex-shrink: 0;
+    }
+    .ap-account .ap-main { flex: 1; min-width: 0; }
+    .ap-account .ap-user { font-weight: 600; color: var(--dark-brown); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ap-account .ap-profile { font-size: 11px; color: var(--text-secondary); }
+    #account-picker .sp-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+    #account-picker .sp-actions button {
+      font: inherit; padding: 6px 12px; border-radius: 8px;
+      background: var(--panel-white); color: var(--warm-brown);
+      border: 1px solid var(--border); cursor: default;
+    }
+    #account-picker .sp-actions button:hover { background: var(--soft-wheat); }
+
+    #account-indicator {
+      position: relative;
+    }
+    #account-indicator .count-badge {
+      position: absolute; top: -2px; right: -2px;
+      min-width: 14px; height: 14px; padding: 0 3px;
+      background: var(--deep-orange); color: #fff;
+      border-radius: 7px; font-size: 9px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: none;
+    }
+
+    /* Notes */
+    #route-notes { padding: 0; }
+    .notes-layout { display: flex; height: 100%; }
+    .notes-list-pane {
+      width: 300px; flex-shrink: 0; border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; background: var(--panel-white);
+    }
+    .notes-list-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 14px 14px 8px 14px;
+    }
+    .notes-list-head .title { flex: 1; font-size: 16px; font-weight: 700; color: var(--dark-brown); }
+    .notes-list-head button {
+      font: inherit; padding: 6px 10px; border-radius: 8px;
+      background: var(--main-orange); color: #fff; border: 0; cursor: default;
+    }
+    .notes-list-head button:hover { background: var(--deep-orange); }
+    .notes-search-wrap { padding: 0 14px 10px 14px; }
+    .notes-search-wrap input {
+      width: 100%; height: 30px; padding: 0 12px;
+      background: var(--cream-bg-2); border: 1px solid var(--border); border-radius: 10px;
+      outline: none; font: inherit; color: var(--text-primary);
+    }
+    .notes-search-wrap input:focus { border-color: var(--main-orange); background: #fff; }
+    .notes-list { flex: 1; overflow: auto; padding: 4px 8px 8px 8px; }
+    .note-item {
+      padding: 10px 12px; margin: 4px 0; border-radius: 10px; cursor: default;
+      border: 1px solid transparent;
+    }
+    .note-item:hover { background: rgba(255, 216, 166, 0.45); }
+    .note-item.active { background: var(--soft-wheat); border-color: var(--border); }
+    .note-item .n-title { font-weight: 600; color: var(--dark-brown); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .note-item .n-preview { font-size: 11px; color: var(--text-secondary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .note-item .n-date { font-size: 10px; color: var(--text-secondary); margin-top: 4px; }
+    .notes-editor-pane { flex: 1; display: flex; flex-direction: column; padding: 18px 24px; min-width: 0; }
+    .notes-editor-pane input.e-title {
+      font-size: 20px; font-weight: 700; color: var(--dark-brown);
+      background: transparent; border: 0; outline: none;
+      padding: 6px 0; border-bottom: 1px solid var(--border);
+    }
+    .notes-editor-pane textarea.e-body {
+      flex: 1; margin-top: 12px;
+      font: 14px "PingFang SC", "SF Pro Text", -apple-system, "Hiragino Sans", sans-serif;
+      line-height: 1.6; color: var(--text-primary);
+      background: transparent; border: 0; outline: none; resize: none;
+    }
+    .notes-editor-pane .e-footer {
+      display: flex; justify-content: space-between; align-items: center;
+      padding-top: 10px; border-top: 1px solid var(--border);
+      color: var(--text-secondary); font-size: 11px;
+    }
+    .notes-editor-pane .e-footer button {
+      font: inherit; padding: 4px 12px; border-radius: 8px;
+      background: transparent; color: var(--deep-orange);
+      border: 1px solid var(--border); cursor: default;
+    }
+    .notes-editor-pane .e-footer button:hover { background: var(--deep-orange); color: #fff; border-color: transparent; }
+    .notes-empty-editor { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); }
+
+    /* Quick Note FAB & popover */
+    #quick-note-fab {
+      position: fixed; right: 24px; bottom: 24px; z-index: 40;
+      width: 48px; height: 48px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--main-orange), var(--deep-orange));
+      color: #fff; display: none; align-items: center; justify-content: center;
+      cursor: default; font-size: 20px;
+      box-shadow: var(--shadow-lg);
+      transition: transform 150ms ease;
+    }
+    #quick-note-fab:hover { transform: scale(1.06); }
+    body.in-browser #quick-note-fab { display: flex; }
+    body.hide-quick-note #quick-note-fab { display: none !important; }
+    #quick-note-popover {
+      position: fixed; right: 24px; bottom: 84px; z-index: 45;
+      width: 340px; background: var(--panel-white-2);
+      border: 1px solid var(--border-strong); border-radius: 14px;
+      box-shadow: var(--shadow-lg); padding: 14px; display: none;
+    }
+    #quick-note-popover.visible { display: block; }
+    #quick-note-popover .qn-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    #quick-note-popover .qn-head .qn-title { font-weight: 700; color: var(--dark-brown); }
+    #quick-note-popover .qn-head .qn-hint { font-size: 10px; color: var(--text-secondary); }
+    #quick-note-popover input.qn-title-input {
+      width: 100%; height: 30px; padding: 0 10px; margin-bottom: 8px;
+      background: var(--panel-white); border: 1px solid var(--border);
+      border-radius: 8px; outline: none; font: inherit; color: var(--text-primary);
+    }
+    #quick-note-popover textarea.qn-body {
+      width: 100%; height: 120px; padding: 8px 10px;
+      background: var(--panel-white); border: 1px solid var(--border);
+      border-radius: 8px; outline: none; resize: none;
+      font: inherit; color: var(--text-primary); line-height: 1.5;
+    }
+    #quick-note-popover input:focus, #quick-note-popover textarea:focus { border-color: var(--main-orange); background: #fff; }
+    #quick-note-popover .qn-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+    #quick-note-popover .qn-actions button {
+      font: inherit; padding: 6px 14px; border-radius: 8px;
+      background: var(--panel-white); color: var(--warm-brown);
+      border: 1px solid var(--border); cursor: default;
+    }
+    #quick-note-popover .qn-actions .primary { background: var(--main-orange); color: #fff; border-color: transparent; }
+    #quick-note-popover .qn-actions .primary:hover { background: var(--deep-orange); }
+
+    /* Tasks */
+    #route-tasks .tasks-wrap { max-width: 720px; }
+    .tasks-add {
+      display: flex; gap: 8px; margin: 14px 0 20px 0;
+    }
+    .tasks-add input {
+      flex: 1; height: 36px; padding: 0 14px;
+      background: var(--panel-white-2); border: 1px solid var(--border); border-radius: 10px;
+      outline: none; font: inherit; color: var(--text-primary);
+    }
+    .tasks-add input:focus { background: #fff; border-color: var(--main-orange); }
+    .tasks-section-title { margin: 18px 0 8px 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); }
+    .task-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 12px; margin-bottom: 6px;
+      background: var(--panel-white-2); border: 1px solid var(--border); border-radius: 10px;
+      cursor: default;
+    }
+    .task-row:hover { background: var(--panel-white); }
+    .task-row.done .t-text { text-decoration: line-through; color: var(--text-secondary); }
+    .task-check {
+      width: 20px; height: 20px; border-radius: 50%;
+      border: 2px solid var(--border-strong); cursor: default; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; transition: background 120ms ease, border-color 120ms ease;
+    }
+    .task-row.done .task-check { background: var(--main-orange); border-color: var(--main-orange); }
+    .task-row.done .task-check::after { content: "✓"; }
+    .task-row.fired:not(.done) .task-check { border-color: var(--deep-orange); box-shadow: 0 0 0 3px rgba(200, 107, 42, 0.18); }
+    .t-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .t-due { font-size: 11px; color: var(--text-secondary); padding: 3px 8px; border-radius: 8px; background: var(--cream-bg-2); border: 1px solid var(--border); cursor: default; white-space: nowrap; }
+    .t-due:hover { background: var(--soft-wheat); color: var(--dark-brown); }
+    .t-due.overdue { background: rgba(200, 107, 42, 0.15); color: var(--deep-orange); border-color: rgba(200, 107, 42, 0.4); }
+    .t-actions { display: flex; gap: 4px; opacity: 0; }
+    .task-row:hover .t-actions { opacity: 1; }
+    .t-actions button {
+      font: inherit; font-size: 11px; padding: 3px 8px; border-radius: 6px;
+      background: var(--panel-white); color: var(--warm-brown);
+      border: 1px solid var(--border); cursor: default;
+    }
+    .t-actions button:hover { background: var(--main-orange); color: #fff; border-color: transparent; }
+
+    /* Profile dropdown menu */
+    .menu {
+      position: absolute; background: var(--panel-white); border: 1px solid var(--border);
+      border-radius: 10px; padding: 4px; box-shadow: var(--shadow-lg); z-index: 60;
+      min-width: 180px;
+    }
+    .menu .menu-item {
+      display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px;
+      cursor: default; font-size: 12px;
+    }
+    .menu .menu-item:hover { background: var(--soft-wheat); }
+    .menu .menu-item .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .menu .menu-item.check::before { content: "✓"; margin-right: 4px; color: var(--main-orange); width: 10px; }
+    .menu .menu-item:not(.check)::before { content: " "; margin-right: 4px; width: 10px; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div class="nav-btn" id="sidebar-toggle" data-i18n-title="sidebar.toggle" title="Toggle sidebar">☰</div>
+    <div class="nav-btn" id="back" data-i18n-title="topbar.back">‹</div>
+    <div class="nav-btn" id="forward" data-i18n-title="topbar.forward">›</div>
+    <div class="nav-btn" id="reload" data-i18n-title="topbar.reload">⟳</div>
+    <div class="nav-btn" id="go-home" data-i18n-title="topbar.home_btn">⌂</div>
+    <input id="url" type="text" spellcheck="false" data-i18n-placeholder="topbar.url_placeholder" />
+    <div id="profile-chip" data-i18n-title="topbar.profile_tip"><span class="dot"></span><span id="profile-chip-name">Main</span></div>
+    <div class="nav-btn" id="bookmark-star" data-i18n-title="topbar.bookmark">♡</div>
+    <div class="nav-btn" id="more-btn" data-i18n-title="topbar.more">⋯</div>
+  </div>
+
+  <div id="layout">
+    <div id="sidebar">
+      <div id="brand">
+        <div class="badge"></div>
+        <div class="text">
+          <div class="name" data-i18n="brand.name">竹小春三零</div>
+          <div class="sub" data-i18n="brand.sub">Browser</div>
+        </div>
+      </div>
+      <div id="nav-list">
+        <div class="nav-item" data-route="home"><div class="icon"></div><span data-i18n="sidebar.home">Home</span></div>
+        <div class="nav-item" data-route="library"><div class="icon"></div><span data-i18n="sidebar.library">Library</span></div>
+        <div class="nav-item" data-route="favorites"><div class="icon"></div><span data-i18n="sidebar.favorites">Favorites</span></div>
+        <div class="nav-item" data-route="recent"><div class="icon"></div><span data-i18n="sidebar.recent">Recently Played</span></div>
+        <div class="nav-section" data-i18n="sidebar.section.session">Session</div>
+        <div class="nav-item" data-route="windows"><div class="icon"></div><span data-i18n="sidebar.windows">Windows</span></div>
+        <div class="nav-item" data-route="profiles"><div class="icon"></div><span data-i18n="sidebar.profiles">Profiles</span></div>
+        <div class="nav-section" data-i18n="sidebar.section.tools">Tools</div>
+        <div class="nav-item" data-route="notes"><div class="icon emoji">📝</div><span data-i18n="sidebar.notes">Notes</span></div>
+        <div class="nav-item" data-route="tasks"><div class="icon emoji">✓</div><span data-i18n="sidebar.tasks">Tasks</span></div>
+        <div class="nav-section" data-i18n="sidebar.section.app">App</div>
+        <div class="nav-item" data-route="settings"><div class="icon"></div><span data-i18n="sidebar.settings">Settings</span></div>
+        <div class="nav-item" data-route="shortcuts"><div class="icon emoji">⌘</div><span data-i18n="sidebar.shortcuts">Shortcuts</span></div>
+        <div class="nav-item" data-route="about"><div class="icon"></div><span data-i18n="sidebar.about">About</span></div>
+      </div>
+      <div id="sidebar-footer">
+        <div class="mascot"></div>
+        <div class="bubble" data-i18n="sidebar.bubble">Take a break, play a classic.</div>
+      </div>
+    </div>
+    <div id="main">
+      <!-- HOME -->
+      <div id="route-home" class="route active">
+        <div class="greet"><span id="greet-text">Good evening,</span> <span class="dot" data-i18n="brand.name">竹小春三零</span>.</div>
+        <div class="greet-sub" data-i18n="home.subtitle"></div>
+        <div class="section-head"><div class="title" data-i18n="home.continue"></div><div class="link" data-route-link="recent" data-i18n="home.view_all"></div></div>
+        <div class="grid" id="home-continue"></div>
+        <div class="section-head"><div class="title" data-i18n="home.favorites"></div><div class="link" data-route-link="favorites" data-i18n="home.view_all"></div></div>
+        <div class="grid" id="home-favorites"></div>
+        <div class="section-head"><div class="title" data-i18n="home.quick"></div></div>
+        <div class="quick-grid">
+          <div class="quick" data-open="https://www.4399.com/"><div class="q-tag">4399</div><div><div class="q-title">4399</div><div class="q-sub">4399 Games</div></div></div>
+          <div class="quick" data-open="https://www.7k7k.com/"><div class="q-tag">7K</div><div><div class="q-title">7K7K</div><div class="q-sub">7K7K Games</div></div></div>
+          <div class="quick" data-open="https://flashpointarchive.org/"><div class="q-tag">FP</div><div><div class="q-title">Flashpoint</div><div class="q-sub">Archive</div></div></div>
+          <div class="quick" data-route-link="recent"><div class="q-tag">🕘</div><div><div class="q-title" data-i18n="sidebar.recent"></div><div class="q-sub" data-i18n="home.view_all"></div></div></div>
+        </div>
+        <div class="section-head"><div class="title" data-i18n="home.windows"></div><div class="link" data-route-link="windows" data-i18n="home.view_all"></div></div>
+        <div id="home-windows"></div>
+      </div>
+
+      <!-- LIBRARY -->
+      <div id="route-library" class="route">
+        <div class="list-head"><div class="title" data-i18n="lib.title"></div><div class="count" id="lib-count"></div></div>
+        <div class="lib-toolbar">
+          <div class="list-search"><input id="lib-search" data-i18n-placeholder="lib.search" /></div>
+          <select id="lib-filter">
+            <option value="all" data-i18n="lib.filter_all"></option>
+            <option value="favorites" data-i18n="lib.filter_favorites"></option>
+          </select>
+          <select id="lib-sort">
+            <option value="last_played" data-i18n="lib.sort_last_played"></option>
+            <option value="most_played" data-i18n="lib.sort_most_played"></option>
+            <option value="added" data-i18n="lib.sort_added"></option>
+            <option value="title" data-i18n="lib.sort_title"></option>
+          </select>
+        </div>
+        <div class="lib-grid" id="lib-grid"></div>
+      </div>
+
+      <!-- FAVORITES -->
+      <div id="route-favorites" class="route">
+        <div class="list-head"><div class="title" data-i18n="fav.title"></div><div class="count" id="fav-count"></div></div>
+        <div class="list-search"><input id="fav-search" data-i18n-placeholder="fav.search" /></div>
+        <div id="fav-list"></div>
+      </div>
+
+      <!-- RECENT -->
+      <div id="route-recent" class="route">
+        <div class="list-head"><div class="title" data-i18n="rec.title"></div><div class="count" id="rec-count"></div></div>
+        <div class="list-search"><input id="rec-search" data-i18n-placeholder="rec.search" /></div>
+        <div id="rec-list"></div>
+      </div>
+
+      <!-- WINDOWS -->
+      <div id="route-windows" class="route">
+        <div class="list-head"><div class="title" data-i18n="win.title"></div><div class="count" id="win-count"></div></div>
+        <div style="margin-top: 16px;" id="win-list"></div>
+      </div>
+
+      <!-- PROFILES -->
+      <div id="route-profiles" class="route">
+        <div class="list-head"><div class="title" data-i18n="prof.title"></div></div>
+        <div class="list-head" style="margin-top: 4px;"><div class="subtitle" data-i18n="prof.subtitle"></div></div>
+        <div style="margin: 14px 0;">
+          <button id="profile-create-btn" class="btn" style="padding: 6px 12px; border-radius: 8px; background: var(--main-orange); color: #fff; border: 0; cursor: default; font: inherit;" data-i18n="prof.create"></button>
+        </div>
+        <div id="profile-list"></div>
+      </div>
+
+      <!-- NOTES -->
+      <div id="route-notes" class="route">
+        <div class="notes-layout">
+          <div class="notes-list-pane">
+            <div class="notes-list-head">
+              <div class="title" data-i18n="notes.title"></div>
+              <button id="notes-new-btn" data-i18n="notes.new"></button>
+            </div>
+            <div class="notes-search-wrap">
+              <input id="notes-search" data-i18n-placeholder="notes.search" />
+            </div>
+            <div class="notes-list" id="notes-list"></div>
+          </div>
+          <div class="notes-editor-pane" id="notes-editor">
+            <div class="notes-empty-editor" id="notes-empty" data-i18n="notes.empty_editor"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TASKS -->
+      <div id="route-tasks" class="route">
+        <div class="tasks-wrap">
+          <div class="list-head"><div class="title" data-i18n="tasks.title"></div></div>
+          <div class="tasks-add">
+            <input id="task-new-text" data-i18n-placeholder="tasks.placeholder" />
+          </div>
+          <div id="tasks-pending-section">
+            <div class="tasks-section-title" data-i18n="tasks.section_pending"></div>
+            <div id="tasks-pending"></div>
+          </div>
+          <div id="tasks-done-section">
+            <div class="tasks-section-title" data-i18n="tasks.section_done"></div>
+            <div id="tasks-done"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div id="route-settings" class="route">
+        <div class="list-head"><div class="title" data-i18n="set.title"></div></div>
+        <div class="settings-wrap" style="margin-top: 18px;">
+          <div class="settings-group">
+            <h3 data-i18n="id.title"></h3>
+            <div class="settings-row">
+              <div style="flex: 1;"><div class="label" data-i18n="id.name"></div></div>
+              <input id="id-name" style="width: 220px; font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-white); color: var(--text-primary); outline: none;" />
+            </div>
+            <div class="settings-row">
+              <div style="flex: 1;"><div class="label" data-i18n="id.sub"></div></div>
+              <input id="id-sub" style="width: 220px; font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-white); color: var(--text-primary); outline: none;" />
+            </div>
+            <div class="settings-row">
+              <div style="flex: 1;"><div class="label" data-i18n="id.bubble"></div></div>
+              <input id="id-bubble" style="width: 220px; font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-white); color: var(--text-primary); outline: none;" />
+            </div>
+            <div class="settings-row">
+              <div style="flex: 1;"><div class="label" data-i18n="id.home_sub"></div></div>
+              <input id="id-home-sub" style="width: 260px; font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-white); color: var(--text-primary); outline: none;" />
+            </div>
+            <div class="settings-row" style="justify-content: flex-end;">
+              <button id="id-reset" data-i18n="id.reset"></button>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <h3 data-i18n="set.general"></h3>
+            <div class="settings-row">
+              <div><div class="label" data-i18n="set.language"></div></div>
+              <select id="setting-language">
+                <option value="zh-CN">简体中文</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <div><div class="label" data-i18n="set.default_profile"></div></div>
+              <select id="setting-default-profile"></select>
+            </div>
+            <div class="settings-row">
+              <div><div class="label" data-i18n="set.restore_session"></div></div>
+              <div class="switch" id="setting-restore-session"></div>
+            </div>
+            <div class="settings-row">
+              <div><div class="label" data-i18n="set.sidebar_collapsed"></div></div>
+              <div class="switch" id="setting-sidebar-collapsed"></div>
+            </div>
+            <div class="settings-row">
+              <div><div class="label" data-i18n="set.show_quick_note"></div></div>
+              <div class="switch" id="setting-show-quick-note"></div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <h3 data-i18n="set.privacy"></h3>
+            <div class="settings-row">
+              <div><div class="label" data-i18n="set.clear_history"></div></div>
+              <button id="setting-clear-history" data-i18n="set.clear_history"></button>
+            </div>
+            <div class="settings-row">
+              <div><div class="label" data-i18n="set.clear_cookies_cache"></div></div>
+              <button id="setting-clear-cookies" data-i18n="set.clear_cookies_cache"></button>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <h3 data-i18n="set.passwords"></h3>
+            <div class="warn" data-i18n="pw.warning"></div>
+            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+              <div class="list-search" style="flex:1; margin: 0;"><input id="pw-search" data-i18n-placeholder="pw.search" /></div>
+              <button id="pw-add-btn" style="font: inherit; padding: 6px 12px; border-radius: 8px; background: var(--main-orange); color: #fff; border: 0; cursor: default;" data-i18n="pw.add"></button>
+            </div>
+            <div id="pw-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ABOUT -->
+      <div id="route-about" class="route">
+        <div class="about-card">
+          <div class="a-badge"></div>
+          <h2 data-i18n="brand.name">竹小春三零</h2>
+          <div class="ver"><span data-i18n="about.version"></span> 1.2.0 — DDT</div>
+          <p><span data-i18n="about.tagline"></span><br><span data-i18n="about.built_for"></span></p>
+          <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); width: 100%; text-align: center;">
+            <div style="font-size: 12px; color: var(--dark-brown); font-weight: 700;" data-i18n="about.creator"></div>
+            <div style="margin-top: 10px; font-size: 11px; color: var(--text-secondary);" data-i18n="about.feedback"></div>
+            <div style="margin-top: 4px; font-size: 13px; color: var(--deep-orange); font-weight: 600; user-select: text;" id="about-feedback-email">take_haruchan30+browser@gmail.com</div>
+            <div style="margin-top: 4px; font-size: 11px; color: var(--text-secondary);" data-i18n="about.feedback_hint"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SHORTCUTS -->
+      <div id="route-shortcuts" class="route">
+        <div class="list-head"><div class="title" data-i18n="sc.title"></div></div>
+        <div class="settings-wrap" style="margin-top: 18px;">
+          <div class="settings-group">
+            <h3 data-i18n="sc.window_manage"></h3>
+            <div class="settings-row"><div class="label">New Tab</div><div class="kbd-hint">⌘T</div></div>
+            <div class="settings-row"><div class="label">Close Tab</div><div class="kbd-hint">⌘W</div></div>
+            <div class="settings-row"><div class="label">Next / Previous Tab</div><div class="kbd-hint">⌘⌥→ / ⌘⌥←</div></div>
+            <div class="settings-row"><div class="label">Move Tab to New Window</div><div class="kbd-hint">⌘⇧N</div></div>
+            <div class="settings-row"><div class="label">Toggle Sidebar</div><div class="kbd-hint">⌘\\</div></div>
+          </div>
+          <div class="settings-group">
+            <h3 data-i18n="sc.navigation"></h3>
+            <div class="settings-row"><div class="label">Focus Address Bar</div><div class="kbd-hint">⌘L</div></div>
+            <div class="settings-row"><div class="label">Reload Tab</div><div class="kbd-hint">F5</div></div>
+            <div class="settings-row"><div class="label">Hard Reload (clear cache)</div><div class="kbd-hint">⌘⇧R</div></div>
+            <div class="settings-row"><div class="label" data-i18n="sidebar.favorites"></div><div class="kbd-hint">⌘B</div></div>
+            <div class="settings-row"><div class="label" data-i18n="sidebar.recent"></div><div class="kbd-hint">⌘Y</div></div>
+            <div class="settings-row"><div class="label">Inspect Game Page</div><div class="kbd-hint">⌥⌘I</div></div>
+          </div>
+          <div class="settings-group">
+            <h3 data-i18n="sc.zoom"></h3>
+            <div class="settings-row"><div class="label">Zoom In / Out</div><div class="kbd-hint">⌘+ / ⌘−</div></div>
+            <div class="settings-row"><div class="label">Reset Zoom</div><div class="kbd-hint">⌘0</div></div>
+            <div class="settings-row"><div class="label">Fit to Window</div><div class="kbd-hint">⌘9</div></div>
+          </div>
+          <div class="settings-group">
+            <h3 data-i18n="sc.misc"></h3>
+            <div class="settings-row"><div class="label" data-i18n="notes.quick_title"></div><div class="kbd-hint">⌘⇧N</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BROWSER -->
+      <div id="route-browser" class="route">
+        <div id="tab-strip">
+          <div id="new-tab-btn" title="New tab (⌘T)">+</div>
+          <div id="tab-list" style="display: flex; align-items: center; gap: 4px;"></div>
+          <div class="spacer"></div>
+          <div class="zc">
+            <div id="game-mode-btn" data-i18n-title="game_mode.toggle" title="Game mode">⛶</div>
+            <div class="speed-ind" id="speed-indicator" title="Flash speed">1x ▾</div>
+            <div class="nav-btn" id="zoom-out-btn" title="Zoom out (⌘-)">−</div>
+            <div class="zoom-ind" id="zoom-indicator">100%</div>
+            <div class="nav-btn" id="zoom-in-btn" title="Zoom in (⌘+)">+</div>
+            <div class="nav-btn" id="fit-btn" title="Fit page to window (⌘9)">⤢</div>
+          </div>
+        </div>
+        <div id="webviews-container"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Note FAB -->
+  <div id="quick-note-fab" data-i18n-title="notes.quick_fab">📝</div>
+  <div id="quick-note-popover">
+    <div class="qn-head">
+      <div class="qn-title" data-i18n="notes.quick_title"></div>
+      <div class="qn-hint" data-i18n="notes.quick_hint"></div>
+    </div>
+    <input class="qn-title-input" id="qn-title" data-i18n-placeholder="notes.placeholder_title" />
+    <textarea class="qn-body" id="qn-body" data-i18n-placeholder="notes.placeholder_body"></textarea>
+    <div class="qn-actions">
+      <button id="qn-close" data-i18n="common.close"></button>
+      <button id="qn-save" class="primary" data-i18n="notes.quick_save"></button>
+    </div>
+  </div>
+
+  <!-- Library item edit modal -->
+  <div id="lib-edit" style="position: fixed; top: 56px; right: 20px; z-index: 50; background: var(--panel-white-2); border: 1px solid var(--border-strong); border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow-lg); width: 380px; display: none;">
+    <div style="font-weight: 700; color: var(--dark-brown); margin-bottom: 10px;" data-i18n="lib.edit_title"></div>
+    <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+      <label style="width: 70px; font-size: 11px; color: var(--text-secondary);">Title</label>
+      <input id="le-title" style="flex: 1; height: 28px; padding: 0 10px; background: var(--panel-white); border: 1px solid var(--border); border-radius: 8px; outline: none; font: inherit;" />
+    </div>
+    <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+      <label style="width: 70px; font-size: 11px; color: var(--text-secondary);" data-i18n="lib.tags"></label>
+      <input id="le-tags" data-i18n-placeholder="lib.tags_hint" style="flex: 1; height: 28px; padding: 0 10px; background: var(--panel-white); border: 1px solid var(--border); border-radius: 8px; outline: none; font: inherit;" />
+    </div>
+    <div style="display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px;">
+      <label style="width: 70px; font-size: 11px; color: var(--text-secondary); padding-top: 6px;" data-i18n="lib.notes"></label>
+      <textarea id="le-notes" style="flex: 1; height: 80px; padding: 6px 10px; background: var(--panel-white); border: 1px solid var(--border); border-radius: 8px; outline: none; font: inherit; resize: none;"></textarea>
+    </div>
+    <div style="display: flex; justify-content: space-between; gap: 6px; margin-top: 10px;">
+      <button id="le-delete" style="font: inherit; padding: 6px 12px; border-radius: 8px; background: var(--panel-white); color: var(--deep-orange); border: 1px solid var(--border); cursor: default;" data-i18n="lib.remove"></button>
+      <div style="display: flex; gap: 6px;">
+        <button id="le-cancel" style="font: inherit; padding: 6px 12px; border-radius: 8px; background: var(--panel-white); color: var(--warm-brown); border: 1px solid var(--border); cursor: default;" data-i18n="common.cancel"></button>
+        <button id="le-save" style="font: inherit; padding: 6px 12px; border-radius: 8px; background: var(--main-orange); color: #fff; border: 0; cursor: default;" data-i18n="common.save"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manual add-password modal (reuses save-prompt styles) -->
+  <div id="add-pw-prompt" class="visible" style="position: fixed; top: 56px; right: 20px; z-index: 50; background: var(--panel-white-2); border: 1px solid var(--border-strong); border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow-lg); width: 360px; display: none;">
+    <div style="font-weight: 700; color: var(--dark-brown); margin-bottom: 10px;" data-i18n="pw.add_title"></div>
+    <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+      <label style="width: 70px; font-size: 11px; color: var(--text-secondary);" data-i18n="pw.host_label"></label>
+      <input id="ap-add-host" style="flex: 1; height: 28px; padding: 0 10px; background: var(--panel-white); border: 1px solid var(--border); border-radius: 8px; outline: none; font: inherit; color: var(--text-primary);" placeholder="example.com" />
+    </div>
+    <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+      <label style="width: 70px; font-size: 11px; color: var(--text-secondary);" data-i18n="pw.username"></label>
+      <input id="ap-add-user" style="flex: 1; height: 28px; padding: 0 10px; background: var(--panel-white); border: 1px solid var(--border); border-radius: 8px; outline: none; font: inherit; color: var(--text-primary);" />
+    </div>
+    <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+      <label style="width: 70px; font-size: 11px; color: var(--text-secondary);" data-i18n="pw.password"></label>
+      <input id="ap-add-pw" type="password" style="flex: 1; height: 28px; padding: 0 10px; background: var(--panel-white); border: 1px solid var(--border); border-radius: 8px; outline: none; font: inherit; color: var(--text-primary);" />
+    </div>
+    <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+      <label style="width: 70px; font-size: 11px; color: var(--text-secondary);" data-i18n="pw.profile_label"></label>
+      <select id="ap-add-profile" style="flex: 1; height: 28px; padding: 0 8px; background: var(--panel-white); border: 1px solid var(--border); border-radius: 8px; outline: none; font: inherit; color: var(--text-primary);"></select>
+    </div>
+    <div style="display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px;">
+      <button id="ap-add-cancel" style="font: inherit; padding: 6px 12px; border-radius: 8px; background: var(--panel-white); color: var(--warm-brown); border: 1px solid var(--border); cursor: default;" data-i18n="common.cancel"></button>
+      <button id="ap-add-save" style="font: inherit; padding: 6px 12px; border-radius: 8px; background: var(--main-orange); color: #fff; border: 0; cursor: default;" data-i18n="common.save"></button>
+    </div>
+  </div>
+
+  <!-- Multi-account picker -->
+  <div id="account-picker">
+    <div class="sp-title" data-i18n="pw.choose_title"></div>
+    <div class="sp-site" id="ap-site"></div>
+    <div class="ap-list" id="ap-list"></div>
+    <div class="sp-actions">
+      <button id="ap-close" data-i18n="common.close"></button>
+    </div>
+  </div>
+
+  <!-- Password save prompt -->
+  <div id="save-prompt">
+    <div class="sp-title" data-i18n="pw.save_prompt"></div>
+    <div class="sp-site" id="sp-site"></div>
+    <div class="sp-row"><label data-i18n="pw.username"></label><input id="sp-username" /></div>
+    <div class="sp-row"><label data-i18n="pw.password"></label><input id="sp-password" type="password" /></div>
+    <div class="sp-row"><label data-i18n="pw.profile"></label><input id="sp-profile" disabled /></div>
+    <div class="sp-actions">
+      <button id="sp-never" data-i18n="pw.never"></button>
+      <button id="sp-not-now" data-i18n="pw.not_now"></button>
+      <button id="sp-save" class="primary" data-i18n="pw.save"></button>
+    </div>
+  </div>
+</div>
+<script src="renderer.js"></script>
+</body>
+</html>
