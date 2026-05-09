@@ -68,7 +68,7 @@ static bool speed_from_env(double *out) {
   const char *profile = getenv("XZFLASH_SPEED_PROFILE");
   if (profile && *profile) {
     int parsed_profile = atoi(profile);
-    if (parsed_profile >= 1 && parsed_profile <= 2) g_speed_profile = parsed_profile;
+    if (parsed_profile >= 0 && parsed_profile <= 2) g_speed_profile = parsed_profile;
   }
   return true;
 }
@@ -97,7 +97,7 @@ static bool speed_from_notify(double *out) {
   if (state >= 1000000) {
     uint64_t profile = state / 1000000;
     uint64_t speed = state % 1000000;
-    if (profile >= 1 && profile <= 2) g_speed_profile = (int)profile;
+    if (profile <= 2) g_speed_profile = (int)profile;
     if (speed == 0) return false;
     *out = clamp_speed((double)speed / 1000.0);
     return true;
@@ -330,6 +330,7 @@ static uint64_t my_mach_absolute_time(void) {
 
 static int my_clock_gettime(clockid_t clk, struct timespec *tp) {
   if (!g_active || !tp) return clock_gettime(clk, tp);
+  if (g_speed_profile == 0) return clock_gettime(clk, tp);
   if (clk != CLOCK_REALTIME && clk != CLOCK_MONOTONIC) return clock_gettime(clk, tp);
   if (g_speed_profile != 2 && clk == CLOCK_MONOTONIC) return clock_gettime(clk, tp);
   pthread_mutex_lock(&g_lock);
@@ -343,6 +344,7 @@ static int my_clock_gettime(clockid_t clk, struct timespec *tp) {
 
 static int my_gettimeofday(struct timeval *tv, void *tz) {
   if (!g_active || !tv) return gettimeofday(tv, tz);
+  if (g_speed_profile == 0) return gettimeofday(tv, tz);
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   *tv = virtual_tv();
@@ -352,6 +354,7 @@ static int my_gettimeofday(struct timeval *tv, void *tz) {
 
 static time_t my_time(time_t *tloc) {
   if (!g_active) return time(tloc);
+  if (g_speed_profile == 0) return time(tloc);
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   time_t out = virtual_time_value();
@@ -362,6 +365,7 @@ static time_t my_time(time_t *tloc) {
 
 static CFAbsoluteTime my_CFAbsoluteTimeGetCurrent(void) {
   if (!g_active) return CFAbsoluteTimeGetCurrent();
+  if (g_speed_profile == 0) return CFAbsoluteTimeGetCurrent();
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   CFAbsoluteTime out = virtual_cf_value();

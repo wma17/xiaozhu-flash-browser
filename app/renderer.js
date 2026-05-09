@@ -58,6 +58,8 @@ async function loadStores() {
   skippedSites = sk || []; notes = nt || []; tasks = tk || [];
   settings = Object.assign(settings, st || {});
   settings.identity = settings.identity || {};
+  if (!['safe', 'compatible', 'strong'].includes(settings.speedProfile)) settings.speedProfile = 'safe';
+  if (settings.speedAutoMute == null) settings.speedAutoMute = true;
   [speedFactor, speedHookEnabled] = await Promise.all([
     ipcRenderer.invoke('speed:get'),
     ipcRenderer.invoke('speed:hook-enabled'),
@@ -432,6 +434,7 @@ function updateZoomIndicator() {
 }
 
 function speedProfileCode() {
+  if (settings.speedProfile === 'compatible') return 0;
   return settings.speedProfile === 'strong' ? 2 : 1;
 }
 
@@ -648,7 +651,10 @@ function updateSpeedIndicator() {
   const el = $('speed-indicator');
   if (!el) return;
   const rounded = Math.round((speedFactor || 1) * 100) / 100;
-  el.textContent = speedHookEnabled ? (rounded + 'x ▾') : '1x';
+  const modeText = settings.speedProfile === 'strong'
+      ? i18n.t('speed.mode_strong_short')
+      : (settings.speedProfile === 'compatible' ? i18n.t('speed.mode_compat_short') : i18n.t('speed.mode_safe_short'));
+  el.textContent = speedHookEnabled ? (rounded + 'x ' + modeText + ' ▾') : '1x';
   el.classList.toggle('hot', rounded > 3);
   el.title = speedHookEnabled ? (rounded === 1 ? i18n.t('speed.normal') : i18n.t('speed.tip')) : i18n.t('speed.disabled_hint');
 }
@@ -686,31 +692,29 @@ function showSpeedMenu(anchor) {
     armMenuClose();
     return;
   }
-  const offItem = document.createElement('div');
-  offItem.className = 'menu-item';
-  offItem.textContent = i18n.t('speed.disable_experimental');
-  offItem.addEventListener('click', (ev) => {
-    ev.stopPropagation();
-    const t = activeTab();
-    ipcRenderer.invoke('speed:relaunch', false, t ? t.url : null);
-  });
-  menu.appendChild(offItem);
-  const topDiv = document.createElement('div');
-  topDiv.style.cssText = 'border-top: 1px solid var(--border); margin: 4px 6px;';
-  menu.appendChild(topDiv);
-  const profileItem = document.createElement('div');
-  profileItem.className = 'menu-item';
-  profileItem.textContent = (settings.speedProfile === 'strong')
-      ? i18n.t('speed.profile_strong')
-      : i18n.t('speed.profile_safe');
-  profileItem.addEventListener('click', async (ev) => {
-    ev.stopPropagation();
-    settings.speedProfile = settings.speedProfile === 'strong' ? 'safe' : 'strong';
-    await saveSettings();
-    setSpeedFactor(speedFactor || 1);
-    closeAnyMenus();
-  });
-  menu.appendChild(profileItem);
+  const modeTitle = document.createElement('div');
+  modeTitle.style.cssText = 'padding: 8px 10px 4px; color: var(--text-secondary); font-size: 11px;';
+  modeTitle.textContent = i18n.t('speed.current_mode');
+  menu.appendChild(modeTitle);
+  const profileOptions = [
+    ['safe', i18n.t('speed.profile_safe')],
+    ['compatible', i18n.t('speed.profile_compatible')],
+    ['strong', i18n.t('speed.profile_strong')],
+  ];
+  for (const [key, label] of profileOptions) {
+    const item = document.createElement('div');
+    item.className = 'menu-item' + ((settings.speedProfile || 'safe') === key ? ' check' : '');
+    item.textContent = label;
+    item.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      settings.speedProfile = key;
+      await saveSettings();
+      updateSpeedIndicator();
+      setSpeedFactor(speedFactor || 1);
+      closeAnyMenus();
+    });
+    menu.appendChild(item);
+  }
   const muteItem = document.createElement('div');
   muteItem.className = 'menu-item' + (settings.speedAutoMute ? ' check' : '');
   muteItem.textContent = i18n.t('speed.auto_mute');
@@ -725,7 +729,7 @@ function showSpeedMenu(anchor) {
   const modeDiv = document.createElement('div');
   modeDiv.style.cssText = 'border-top: 1px solid var(--border); margin: 4px 6px;';
   menu.appendChild(modeDiv);
-  const presets = [0.5, 0.8, 1, 1.25, 1.5, 2, 3, 5, 10];
+  const presets = [0.8, 1, 1.1, 1.25, 1.5, 2, 3];
   for (const p of presets) {
     const item = document.createElement('div');
     item.className = 'menu-item' + (Math.abs((speedFactor || 1) - p) < 0.01 ? ' check' : '');

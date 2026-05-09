@@ -15,7 +15,9 @@ process.on('unhandledRejection', (err) => dlog('UNHANDLED: ' + (err && err.stack
 
 const homeUrl = configuration.appUrl || 'https://www.4399.com/';
 const resizable = configuration.resizable !== false;
-const speedMode = process.argv.includes('--xz-speed-mode') || process.env.XZFLASH_ENABLE_SPEED_HOOK === '1';
+const speedMode = process.platform === 'darwin'
+  ? !process.argv.includes('--xz-no-speed-mode') && process.env.XZFLASH_DISABLE_SPEED_HOOK !== '1'
+  : (process.argv.includes('--xz-speed-mode') || process.env.XZFLASH_ENABLE_SPEED_HOOK === '1');
 const initialLaunchUrl = firstLaunchUrlArg();
 
 const windows = new Set();
@@ -29,8 +31,8 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,Ba
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 // --- Flash speed engine ---
-// Normal launches use the original Pepper Flash plugin. Speed mode uses a PPAPI
-// proxy plugin that wraps PPB_Core time callbacks; no DYLD injection is used.
+// macOS launches use a PPAPI proxy plugin at 1x by default. That keeps the
+// live speed controls available without reloading into a separate mode.
 const LEGACY_SPEED_FILE = path.join(os.homedir(), '.xzflash-speed');
 const SPEED_FILE = path.join(os.tmpdir(), 'xzflash-speed-' + (process.getuid ? process.getuid() : 'user'));
 const SPEED_NOTIFY_NAME = 'com.xiaozhu.flash.speed.' + (process.getuid ? process.getuid() : 'user');
@@ -44,7 +46,7 @@ function clampSpeedFactor(value) {
 function clampSpeedProfile(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 1;
-  return Math.max(1, Math.min(2, Math.round(n)));
+  return Math.max(0, Math.min(2, Math.round(n)));
 }
 function writeSpeedFactor(value) {
   const factor = clampSpeedFactor(value);
@@ -75,13 +77,11 @@ function firstLaunchUrlArg() {
   }
   return null;
 }
-// Disabled by default: the previous DYLD injection path can prevent Pepper Flash
-// from loading on some games. Keep the speed factor plumbing/UI available, but
-// do not inject until the hook is proven safe in a separate test build.
-if (!fs.existsSync(SPEED_FILE)) writeSpeedFactor(1);
+// Always start at 1x so a previous accelerated session cannot affect login.
+writeSpeedFactor(1);
 process.env.XZFLASH_SPEED_FACTOR = String(readSpeedFactor());
 process.env.XZFLASH_SPEED_PROFILE = '1';
-publishSpeedFactor(readSpeedFactor());
+publishSpeedFactor(1);
 
 // --- Flash plugin ---
 let pluginName, pluginVersion;
@@ -178,8 +178,13 @@ ipcMain.handle('speed:set', (_e, factor, profile) => {
   return next;
 });
 ipcMain.handle('speed:relaunch', (_e, enable, currentUrl) => {
-  const args = process.argv.slice(1).filter(a => a !== '--xz-speed-mode' && !/^(https?|file):\/\//i.test(a));
-  if (enable) args.push('--xz-speed-mode');
+  const args = process.argv.slice(1).filter(a =>
+    a !== '--xz-speed-mode' &&
+    a !== '--xz-no-speed-mode' &&
+    !/^(https?|file):\/\//i.test(a)
+  );
+  if (enable && process.platform !== 'darwin') args.push('--xz-speed-mode');
+  if (!enable && process.platform === 'darwin') args.push('--xz-no-speed-mode');
   if (currentUrl && /^(https?|file):\/\//i.test(currentUrl)) args.push(currentUrl);
   app.relaunch({ args });
   app.exit(0);

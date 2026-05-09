@@ -65,6 +65,7 @@ static PPB_MessageLoop_1_0 g_message_loop;
 
 static char g_speed_file[1024];
 static double g_speed = 1.0;
+static int g_speed_profile = 1;
 static time_t g_speed_mtime = 0;
 static PP_Time g_time_real_anchor = 0;
 static PP_Time g_time_virtual_anchor = 0;
@@ -92,6 +93,11 @@ static bool speed_from_env(double *out) {
   double parsed = strtod(value, &end);
   if (end == value) return false;
   *out = clamp_speed(parsed);
+  const char *profile = getenv("XZFLASH_SPEED_PROFILE");
+  if (profile && *profile) {
+    int parsed_profile = atoi(profile);
+    if (parsed_profile >= 0 && parsed_profile <= 2) g_speed_profile = parsed_profile;
+  }
   return true;
 }
 
@@ -117,7 +123,11 @@ static bool speed_from_notify(double *out) {
   if (!changed) return false;
   uint64_t state = 0;
   if (notify_get_state(g_notify_token, &state) != NOTIFY_STATUS_OK || state == 0) return false;
-  if (state >= 1000000) state = state % 1000000;
+  if (state >= 1000000) {
+    uint64_t profile = state / 1000000;
+    if (profile <= 2) g_speed_profile = (int)profile;
+    state = state % 1000000;
+  }
   if (state == 0) return false;
   *out = clamp_speed((double)state / 1000.0);
   return true;
@@ -139,7 +149,7 @@ static void apply_speed(double next) {
     }
   }
   g_speed = next;
-  if (g_speed != 1.0) {
+  if (g_speed != 1.0 && g_speed_profile != 0) {
     if (!g_speed_rebound) {
       if (!g_speed_interposer) load_speed_interposer();
       if (g_speed_rebind_image) {
