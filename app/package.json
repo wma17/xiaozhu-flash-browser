@@ -1,7 +1,7 @@
 {
   "name": "xiaozhu-flash-browser",
   "productName": "小竹Flash浏览器",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "小竹Flash浏览器 — 专为经典 Flash 网页游戏打造的暖色系 macOS 浏览器。原创：竹小春三零。",
   "main": "main.js",
   "license": "MIT"

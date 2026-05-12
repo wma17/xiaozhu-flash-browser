@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_BUNDLE="${APP_BUNDLE:-/Applications/小竹Flash浏览器.app}"
 APP_RESOURCES="$APP_BUNDLE/Contents/Resources/app"
+APP_VERSION="$(plutil -extract version raw -o - "$ROOT/app/package.json")"
+INFO_PLIST="$APP_BUNDLE/Contents/Info.plist"
 
 if [[ ! -d "$APP_BUNDLE" ]]; then
   echo "App bundle not found: $APP_BUNDLE" >&2
@@ -20,5 +22,9 @@ if [[ "${BUILD_SPEED_SHIM:-1}" == "1" ]]; then
 else
   rm -rf "$APP_RESOURCES/plugins/PepperFlashPlayerSpeed.plugin"
 fi
+
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$INFO_PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_VERSION" "$INFO_PLIST"
+
 codesign --force --deep --sign - "$APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
