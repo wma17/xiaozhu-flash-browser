@@ -25,7 +25,7 @@
 #include <crt_externs.h>
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-#define SPEED_PROFILE_MAX 7
+#define SPEED_PROFILE_MAX 8
 static bool g_active = false;
 static char g_speed_file[1024];
 static double g_speed = 1.0;
@@ -54,6 +54,63 @@ static bool g_notify_ready = false;
 static int g_notify_token = NOTIFY_TOKEN_INVALID;
 
 static void rebase_locked(void);
+static void flush_diag(bool force);
+
+#define SPEED_DIAG_FLUSH_CALLS 2048
+#define SPEED_SCHEDULE_MIN_NS 1000000ULL
+#define SPEED_SCHEDULE_MIN_US 1000ULL
+
+typedef enum DiagSymbol {
+  DIAG_MACH_ABSOLUTE_TIME = 0,
+  DIAG_TICK_COUNT,
+  DIAG_CLOCK_GETTIME,
+  DIAG_GETTIMEOFDAY,
+  DIAG_TIME,
+  DIAG_CF_ABSOLUTE_TIME,
+  DIAG_DISPATCH_TIME,
+  DIAG_DISPATCH_SOURCE_SET_TIMER,
+  DIAG_PTHREAD_COND_TIMEDWAIT_RELATIVE,
+  DIAG_NANOSLEEP,
+  DIAG_USLEEP,
+  DIAG_POLL,
+  DIAG_SELECT,
+  DIAG_PTHREAD_COND_TIMEDWAIT,
+  DIAG_COUNT
+} DiagSymbol;
+
+typedef struct DiagEntry {
+  const char *name;
+  uint64_t calls;
+  uint64_t changed;
+  uint64_t requested_us_total;
+  uint64_t scaled_us_total;
+  uint64_t last_requested_us;
+  uint64_t last_scaled_us;
+  uint64_t min_requested_us;
+  uint64_t max_requested_us;
+} DiagEntry;
+
+static pthread_mutex_t g_diag_lock = PTHREAD_MUTEX_INITIALIZER;
+static char g_diag_file[1024];
+static uint64_t g_diag_updates = 0;
+static uint64_t g_diag_last_flush_updates = 0;
+static bool g_diag_flushing = false;
+static DiagEntry g_diag[DIAG_COUNT] = {
+  [DIAG_MACH_ABSOLUTE_TIME] = { "mach_absolute_time", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_TICK_COUNT] = { "TickCount", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_CLOCK_GETTIME] = { "clock_gettime", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_GETTIMEOFDAY] = { "gettimeofday", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_TIME] = { "time", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_CF_ABSOLUTE_TIME] = { "CFAbsoluteTimeGetCurrent", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_DISPATCH_TIME] = { "dispatch_time", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_DISPATCH_SOURCE_SET_TIMER] = { "dispatch_source_set_timer", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_PTHREAD_COND_TIMEDWAIT_RELATIVE] = { "pthread_cond_timedwait_relative_np", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_NANOSLEEP] = { "nanosleep", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_USLEEP] = { "usleep", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_POLL] = { "poll", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_SELECT] = { "select", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+  [DIAG_PTHREAD_COND_TIMEDWAIT] = { "pthread_cond_timedwait", 0, 0, 0, 0, 0, 0, UINT64_MAX, 0 },
+};
 
 static double clamp_speed(double s) {
   if (!(s > 0.0)) return 1.0;
@@ -144,6 +201,103 @@ static struct timeval sec_to_tv(double s) {
   return out;
 }
 
+static uint64_t sec_to_us_for_diag(double s) {
+  if (!(s > 0.0)) return 0;
+  double us = s * 1000000.0;
+  if (us > (double)UINT64_MAX) return UINT64_MAX;
+  return (uint64_t)us;
+}
+
+static void setup_diag_file(void) {
+  if (g_diag_file[0]) return;
+  const char *configured = getenv("XZFLASH_SPEED_DIAG_FILE");
+  if (configured && *configured) {
+    snprintf(g_diag_file, sizeof(g_diag_file), "%s", configured);
+  } else {
+    snprintf(g_diag_file, sizeof(g_diag_file), "/tmp/xzflash-speed-diag-%d.json", getuid());
+  }
+}
+
+static void diag_record(DiagSymbol symbol, bool changed, uint64_t requested_us, uint64_t scaled_us) {
+  if (!g_active || symbol >= DIAG_COUNT) return;
+
+  bool should_flush = false;
+  pthread_mutex_lock(&g_diag_lock);
+  DiagEntry *entry = &g_diag[symbol];
+  entry->calls++;
+  if (changed) entry->changed++;
+  if (requested_us != UINT64_MAX) {
+    entry->requested_us_total += requested_us;
+    entry->scaled_us_total += scaled_us;
+    entry->last_requested_us = requested_us;
+    entry->last_scaled_us = scaled_us;
+    if (requested_us < entry->min_requested_us) entry->min_requested_us = requested_us;
+    if (requested_us > entry->max_requested_us) entry->max_requested_us = requested_us;
+  }
+  g_diag_updates++;
+  should_flush = g_diag_updates - g_diag_last_flush_updates >= SPEED_DIAG_FLUSH_CALLS;
+  pthread_mutex_unlock(&g_diag_lock);
+
+  if (should_flush) flush_diag(false);
+}
+
+static void flush_diag(bool force) {
+  if (!g_active) return;
+  setup_diag_file();
+
+  DiagEntry snapshot[DIAG_COUNT];
+  uint64_t updates = 0;
+  pthread_mutex_lock(&g_diag_lock);
+  updates = g_diag_updates;
+  if (g_diag_flushing || (!force && updates - g_diag_last_flush_updates < SPEED_DIAG_FLUSH_CALLS)) {
+    pthread_mutex_unlock(&g_diag_lock);
+    return;
+  }
+  g_diag_flushing = true;
+  g_diag_last_flush_updates = updates;
+  memcpy(snapshot, g_diag, sizeof(snapshot));
+  pthread_mutex_unlock(&g_diag_lock);
+
+  char tmp[1200];
+  snprintf(tmp, sizeof(tmp), "%s.tmp", g_diag_file);
+  FILE *f = fopen(tmp, "w");
+  if (f) {
+    fprintf(f, "{\n");
+    fprintf(f, "  \"pid\": %d,\n", getpid());
+    fprintf(f, "  \"speed\": %.3f,\n", g_speed);
+    fprintf(f, "  \"profile\": %d,\n", g_speed_profile);
+    fprintf(f, "  \"updates\": %llu,\n", (unsigned long long)updates);
+    fprintf(f, "  \"speed_file\": \"%s\",\n", g_speed_file);
+    fprintf(f, "  \"symbols\": [\n");
+    for (size_t i = 0; i < DIAG_COUNT; i++) {
+      uint64_t min_us = snapshot[i].min_requested_us == UINT64_MAX ? 0 : snapshot[i].min_requested_us;
+      fprintf(f,
+              "    {\"name\":\"%s\",\"calls\":%llu,\"changed\":%llu,"
+              "\"last_requested_us\":%llu,\"last_scaled_us\":%llu,"
+              "\"min_requested_us\":%llu,\"max_requested_us\":%llu,"
+              "\"requested_us_total\":%llu,\"scaled_us_total\":%llu}%s\n",
+              snapshot[i].name,
+              (unsigned long long)snapshot[i].calls,
+              (unsigned long long)snapshot[i].changed,
+              (unsigned long long)snapshot[i].last_requested_us,
+              (unsigned long long)snapshot[i].last_scaled_us,
+              (unsigned long long)min_us,
+              (unsigned long long)snapshot[i].max_requested_us,
+              (unsigned long long)snapshot[i].requested_us_total,
+              (unsigned long long)snapshot[i].scaled_us_total,
+              i + 1 == DIAG_COUNT ? "" : ",");
+    }
+    fprintf(f, "  ]\n");
+    fprintf(f, "}\n");
+    fclose(f);
+    rename(tmp, g_diag_file);
+  }
+
+  pthread_mutex_lock(&g_diag_lock);
+  g_diag_flushing = false;
+  pthread_mutex_unlock(&g_diag_lock);
+}
+
 static double now_mono_ms(void) {
   struct timespec t;
   clock_gettime(CLOCK_MONOTONIC, &t);
@@ -189,19 +343,21 @@ static UInt32 virtual_tick_value(void) {
 }
 
 static bool profile_uses_tick(void) {
-  return g_speed_profile == 2 || g_speed_profile == 4 || g_speed_profile >= 6;
+  return g_speed_profile == 2 || g_speed_profile == 4 ||
+      g_speed_profile == 5 || g_speed_profile == 6 || g_speed_profile == 7;
 }
 
 static bool profile_uses_mach(void) {
-  return g_speed_profile == 3 || g_speed_profile == 4 || g_speed_profile >= 6;
+  return g_speed_profile == 3 || g_speed_profile == 4 ||
+      g_speed_profile == 5 || g_speed_profile == 6 || g_speed_profile == 7;
 }
 
 static bool profile_uses_monotonic_clock(void) {
-  return g_speed_profile == 4 || g_speed_profile >= 6;
+  return g_speed_profile == 4 || g_speed_profile == 6 || g_speed_profile == 7;
 }
 
 static bool profile_uses_wall_clock(void) {
-  return g_speed_profile == 5 || g_speed_profile >= 6;
+  return g_speed_profile == 8;
 }
 
 static void rebase_locked(void) {
@@ -277,32 +433,37 @@ static void maybe_refresh_speed_locked(void) {
   apply_speed_locked(next);
 }
 
-#if 0
-static double current_speed(void) {
+static double current_speed_and_profile(int *profile) {
   double out;
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   out = g_speed;
+  if (profile) *profile = g_speed_profile;
   pthread_mutex_unlock(&g_lock);
   return out;
 }
 
-static uint64_t scale_u64_interval(uint64_t value, double speed) {
+static bool profile_uses_native_schedule_value(int profile) {
+  return profile == 7;
+}
+
+static uint64_t scale_u64_interval(uint64_t value, double speed, uint64_t conservative_floor) {
   if (value == 0 || value == UINT64_MAX || speed == 1.0) return value;
   double scaled = (double)value / speed;
+  if (value >= conservative_floor && scaled < (double)conservative_floor) return conservative_floor;
   if (scaled < 1.0) return 1;
   if (scaled > (double)UINT64_MAX) return UINT64_MAX;
   return (uint64_t)scaled;
 }
 
-static int64_t scale_i64_interval(int64_t value, double speed) {
+static int64_t scale_i64_interval(int64_t value, double speed, int64_t conservative_floor) {
   if (value <= 0 || speed == 1.0) return value;
   double scaled = (double)value / speed;
+  if (value >= conservative_floor && scaled < (double)conservative_floor) return conservative_floor;
   if (scaled < 1.0) return 1;
   if (scaled > (double)INT64_MAX) return INT64_MAX;
   return (int64_t)scaled;
 }
-#endif
 
 __attribute__((constructor))
 static void xzspeed_init(void) {
@@ -327,6 +488,7 @@ static void xzspeed_init(void) {
   } else {
     snprintf(g_speed_file, sizeof(g_speed_file), "/tmp/xzflash-speed-%d", getuid());
   }
+  setup_diag_file();
 
   g_mach_real_anchor = mach_absolute_time();
   g_mach_virt_anchor = g_mach_real_anchor;
@@ -346,80 +508,110 @@ static void xzspeed_init(void) {
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
   pthread_mutex_unlock(&g_lock);
-  fprintf(stderr, "[xzspeed] active in pid %d, speed file %s\n", getpid(), g_speed_file);
+  flush_diag(true);
+  fprintf(stderr, "[xzspeed] active in pid %d, speed file %s, diag %s\n", getpid(), g_speed_file, g_diag_file);
 }
 
 static uint64_t my_mach_absolute_time(void) {
   if (!g_active) return mach_absolute_time();
-  if (!profile_uses_mach()) return mach_absolute_time();
-  uint64_t out;
+  bool changed = false;
+  uint64_t out = 0;
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
-  out = virtual_mach_value();
+  changed = profile_uses_mach();
+  if (changed) out = virtual_mach_value();
   pthread_mutex_unlock(&g_lock);
+  if (!changed) out = mach_absolute_time();
+  diag_record(DIAG_MACH_ABSOLUTE_TIME, changed, UINT64_MAX, UINT64_MAX);
   return out;
 }
 
 static UInt32 my_TickCount(void) {
   if (!g_active) return TickCount();
-  if (!profile_uses_tick()) return TickCount();
-  UInt32 out;
+  bool changed = false;
+  UInt32 out = 0;
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
-  out = virtual_tick_value();
+  changed = profile_uses_tick();
+  if (changed) out = virtual_tick_value();
   pthread_mutex_unlock(&g_lock);
+  if (!changed) out = TickCount();
+  diag_record(DIAG_TICK_COUNT, changed, UINT64_MAX, UINT64_MAX);
   return out;
 }
 
 static int my_clock_gettime(clockid_t clk, struct timespec *tp) {
   if (!g_active || !tp) return clock_gettime(clk, tp);
-  if (clk != CLOCK_REALTIME && clk != CLOCK_MONOTONIC) return clock_gettime(clk, tp);
-  if (clk == CLOCK_REALTIME && !profile_uses_wall_clock()) return clock_gettime(clk, tp);
-  if (clk == CLOCK_MONOTONIC && !profile_uses_monotonic_clock()) return clock_gettime(clk, tp);
+  if (clk != CLOCK_REALTIME && clk != CLOCK_MONOTONIC) {
+    diag_record(DIAG_CLOCK_GETTIME, false, UINT64_MAX, UINT64_MAX);
+    return clock_gettime(clk, tp);
+  }
+  bool changed = false;
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
-  *tp = (clk == CLOCK_REALTIME)
-      ? virtual_ts(g_rt_real_anchor, g_rt_virt_anchor, CLOCK_REALTIME)
-      : virtual_ts(g_mono_real_anchor, g_mono_virt_anchor, CLOCK_MONOTONIC);
+  changed = (clk == CLOCK_REALTIME && profile_uses_wall_clock()) ||
+      (clk == CLOCK_MONOTONIC && profile_uses_monotonic_clock());
+  if (changed) {
+    *tp = (clk == CLOCK_REALTIME)
+        ? virtual_ts(g_rt_real_anchor, g_rt_virt_anchor, CLOCK_REALTIME)
+        : virtual_ts(g_mono_real_anchor, g_mono_virt_anchor, CLOCK_MONOTONIC);
+  }
   pthread_mutex_unlock(&g_lock);
-  return 0;
+  diag_record(DIAG_CLOCK_GETTIME, changed, UINT64_MAX, UINT64_MAX);
+  return changed ? 0 : clock_gettime(clk, tp);
 }
 
 static int my_gettimeofday(struct timeval *tv, void *tz) {
   if (!g_active || !tv) return gettimeofday(tv, tz);
-  if (!profile_uses_wall_clock()) return gettimeofday(tv, tz);
+  bool changed = false;
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
-  *tv = virtual_tv();
+  changed = profile_uses_wall_clock();
+  if (changed) *tv = virtual_tv();
   pthread_mutex_unlock(&g_lock);
-  return 0;
+  diag_record(DIAG_GETTIMEOFDAY, changed, UINT64_MAX, UINT64_MAX);
+  return changed ? 0 : gettimeofday(tv, tz);
 }
 
 static time_t my_time(time_t *tloc) {
   if (!g_active) return time(tloc);
-  if (!profile_uses_wall_clock()) return time(tloc);
+  bool changed = false;
+  time_t out = 0;
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
-  time_t out = virtual_time_value();
+  changed = profile_uses_wall_clock();
+  if (changed) out = virtual_time_value();
   pthread_mutex_unlock(&g_lock);
+  if (!changed) out = time(NULL);
   if (tloc) *tloc = out;
+  diag_record(DIAG_TIME, changed, UINT64_MAX, UINT64_MAX);
   return out;
 }
 
 static CFAbsoluteTime my_CFAbsoluteTimeGetCurrent(void) {
   if (!g_active) return CFAbsoluteTimeGetCurrent();
-  if (!profile_uses_wall_clock()) return CFAbsoluteTimeGetCurrent();
+  bool changed = false;
+  CFAbsoluteTime out = 0;
   pthread_mutex_lock(&g_lock);
   maybe_refresh_speed_locked();
-  CFAbsoluteTime out = virtual_cf_value();
+  changed = profile_uses_wall_clock();
+  if (changed) out = virtual_cf_value();
   pthread_mutex_unlock(&g_lock);
+  if (!changed) out = CFAbsoluteTimeGetCurrent();
+  diag_record(DIAG_CF_ABSOLUTE_TIME, changed, UINT64_MAX, UINT64_MAX);
   return out;
 }
 
-#if 0
 static dispatch_time_t my_dispatch_time(dispatch_time_t when, int64_t delta) {
   if (!g_active || delta <= 0) return dispatch_time(when, delta);
-  return dispatch_time(when, scale_i64_interval(delta, current_speed()));
+  int profile = 0;
+  double speed = current_speed_and_profile(&profile);
+  int64_t scaled = delta;
+  if (profile_uses_native_schedule_value(profile)) {
+    scaled = scale_i64_interval(delta, speed, (int64_t)SPEED_SCHEDULE_MIN_NS);
+  }
+  diag_record(DIAG_DISPATCH_TIME, scaled != delta, (uint64_t)(delta / 1000), (uint64_t)(scaled / 1000));
+  return dispatch_time(when, scaled);
 }
 
 static void my_dispatch_source_set_timer(dispatch_source_t source, dispatch_time_t start, uint64_t interval, uint64_t leeway) {
@@ -427,56 +619,125 @@ static void my_dispatch_source_set_timer(dispatch_source_t source, dispatch_time
     dispatch_source_set_timer(source, start, interval, leeway);
     return;
   }
-  double speed = current_speed();
-  dispatch_source_set_timer(source, start, scale_u64_interval(interval, speed), scale_u64_interval(leeway, speed));
+  int profile = 0;
+  double speed = current_speed_and_profile(&profile);
+  uint64_t scaled_interval = interval;
+  uint64_t scaled_leeway = leeway;
+  if (profile_uses_native_schedule_value(profile)) {
+    scaled_interval = scale_u64_interval(interval, speed, SPEED_SCHEDULE_MIN_NS);
+    scaled_leeway = scale_u64_interval(leeway, speed, SPEED_SCHEDULE_MIN_NS);
+  }
+  diag_record(DIAG_DISPATCH_SOURCE_SET_TIMER, scaled_interval != interval || scaled_leeway != leeway,
+              interval == UINT64_MAX ? UINT64_MAX : interval / 1000,
+              scaled_interval == UINT64_MAX ? UINT64_MAX : scaled_interval / 1000);
+  dispatch_source_set_timer(source, start, scaled_interval, scaled_leeway);
 }
 
 static int my_pthread_cond_timedwait_relative_np(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *relative) {
   if (!g_active || !relative) return pthread_cond_timedwait_relative_np(cond, mutex, relative);
-  double speed = current_speed();
-  struct timespec scaled = sec_to_ts(ts_to_sec(*relative) / speed);
+  int profile = 0;
+  double speed = current_speed_and_profile(&profile);
+  double requested_sec = ts_to_sec(*relative);
+  struct timespec scaled = *relative;
+  if (profile_uses_native_schedule_value(profile)) {
+    double scaled_sec = requested_sec / speed;
+    if (requested_sec >= 0.001 && scaled_sec < 0.001) scaled_sec = 0.001;
+    scaled = sec_to_ts(scaled_sec);
+  }
+  diag_record(DIAG_PTHREAD_COND_TIMEDWAIT_RELATIVE,
+              scaled.tv_sec != relative->tv_sec || scaled.tv_nsec != relative->tv_nsec,
+              sec_to_us_for_diag(requested_sec),
+              sec_to_us_for_diag(ts_to_sec(scaled)));
   return pthread_cond_timedwait_relative_np(cond, mutex, &scaled);
 }
 
 static int my_nanosleep(const struct timespec *rqtp, struct timespec *rmtp) {
   if (!g_active || !rqtp) return nanosleep(rqtp, rmtp);
-  struct timespec scaled = sec_to_ts(ts_to_sec(*rqtp) / current_speed());
+  int profile = 0;
+  double speed = current_speed_and_profile(&profile);
+  double requested_sec = ts_to_sec(*rqtp);
+  struct timespec scaled = *rqtp;
+  if (profile_uses_native_schedule_value(profile)) {
+    double scaled_sec = requested_sec / speed;
+    if (requested_sec >= 0.001 && scaled_sec < 0.001) scaled_sec = 0.001;
+    scaled = sec_to_ts(scaled_sec);
+  }
+  diag_record(DIAG_NANOSLEEP,
+              scaled.tv_sec != rqtp->tv_sec || scaled.tv_nsec != rqtp->tv_nsec,
+              sec_to_us_for_diag(requested_sec),
+              sec_to_us_for_diag(ts_to_sec(scaled)));
   return nanosleep(&scaled, rmtp);
 }
 
 static int my_usleep(useconds_t usec) {
   if (!g_active) return usleep(usec);
-  double scaled = (double)usec / current_speed();
-  if (scaled < 1.0) scaled = 1.0;
-  return usleep((useconds_t)scaled);
+  int profile = 0;
+  double speed = current_speed_and_profile(&profile);
+  useconds_t scaled = usec;
+  if (profile_uses_native_schedule_value(profile)) {
+    uint64_t value = scale_u64_interval((uint64_t)usec, speed, SPEED_SCHEDULE_MIN_US);
+    scaled = value > (uint64_t)UINT32_MAX ? (useconds_t)UINT32_MAX : (useconds_t)value;
+  }
+  diag_record(DIAG_USLEEP, scaled != usec, (uint64_t)usec, (uint64_t)scaled);
+  return usleep(scaled);
 }
 
 static int my_poll(struct pollfd *fds, nfds_t nfds, int timeout) {
   if (!g_active || timeout <= 0) return poll(fds, nfds, timeout);
-  double scaled = (double)timeout / current_speed();
-  if (scaled < 1.0) scaled = 1.0;
-  return poll(fds, nfds, (int)scaled);
+  int profile = 0;
+  double speed = current_speed_and_profile(&profile);
+  int scaled = timeout;
+  if (nfds == 0 && profile_uses_native_schedule_value(profile)) {
+    double value = (double)timeout / speed;
+    if (timeout >= 1 && value < 1.0) value = 1.0;
+    if (value > (double)INT32_MAX) value = (double)INT32_MAX;
+    scaled = (int)value;
+  }
+  diag_record(DIAG_POLL, scaled != timeout, (uint64_t)timeout * 1000ULL, (uint64_t)scaled * 1000ULL);
+  return poll(fds, nfds, scaled);
 }
 
 static int my_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
   if (!g_active || !timeout) return select(nfds, readfds, writefds, exceptfds, timeout);
+  int profile = 0;
+  double speed = current_speed_and_profile(&profile);
   double seconds = (double)timeout->tv_sec + (double)timeout->tv_usec / 1000000.0;
-  struct timeval scaled = sec_to_tv(seconds / current_speed());
+  struct timeval scaled = *timeout;
+  if (nfds == 0 && profile_uses_native_schedule_value(profile)) {
+    double scaled_sec = seconds / speed;
+    if (seconds >= 0.001 && scaled_sec < 0.001) scaled_sec = 0.001;
+    scaled = sec_to_tv(scaled_sec);
+  }
+  diag_record(DIAG_SELECT,
+              scaled.tv_sec != timeout->tv_sec || scaled.tv_usec != timeout->tv_usec,
+              sec_to_us_for_diag(seconds),
+              sec_to_us_for_diag((double)scaled.tv_sec + (double)scaled.tv_usec / 1000000.0));
   return select(nfds, readfds, writefds, exceptfds, &scaled);
 }
 
 static int my_pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime) {
   if (!g_active || !abstime) return pthread_cond_timedwait(cond, mutex, abstime);
-  double speed = current_speed();
-  if (speed == 1.0) return pthread_cond_timedwait(cond, mutex, abstime);
+  int profile = 0;
+  double speed = current_speed_and_profile(&profile);
+  if (!profile_uses_native_schedule_value(profile) || speed == 1.0) {
+    diag_record(DIAG_PTHREAD_COND_TIMEDWAIT, false, UINT64_MAX, UINT64_MAX);
+    return pthread_cond_timedwait(cond, mutex, abstime);
+  }
   struct timespec now;
   clock_gettime(CLOCK_REALTIME, &now);
   double delay = ts_to_sec(*abstime) - ts_to_sec(now);
-  if (delay <= 0) return pthread_cond_timedwait(cond, mutex, abstime);
-  struct timespec scaled = sec_to_ts(ts_to_sec(now) + delay / speed);
+  if (delay <= 0) {
+    diag_record(DIAG_PTHREAD_COND_TIMEDWAIT, false, 0, 0);
+    return pthread_cond_timedwait(cond, mutex, abstime);
+  }
+  double scaled_delay = delay / speed;
+  if (delay >= 0.001 && scaled_delay < 0.001) scaled_delay = 0.001;
+  struct timespec scaled = sec_to_ts(ts_to_sec(now) + scaled_delay);
+  diag_record(DIAG_PTHREAD_COND_TIMEDWAIT, true,
+              sec_to_us_for_diag(delay),
+              sec_to_us_for_diag(scaled_delay));
   return pthread_cond_timedwait(cond, mutex, &scaled);
 }
-#endif
 
 typedef struct SymbolRebinding {
   const char *name;
@@ -490,13 +751,27 @@ static const SymbolRebinding kRebindings[] = {
   { "gettimeofday", (void *)my_gettimeofday },
   { "time", (void *)my_time },
   { "CFAbsoluteTimeGetCurrent", (void *)my_CFAbsoluteTimeGetCurrent },
+  { "dispatch_time", (void *)my_dispatch_time },
+  { "dispatch_source_set_timer", (void *)my_dispatch_source_set_timer },
+  { "pthread_cond_timedwait_relative_np", (void *)my_pthread_cond_timedwait_relative_np },
+  { "nanosleep", (void *)my_nanosleep },
+  { "usleep", (void *)my_usleep },
+  { "poll", (void *)my_poll },
+  { "select", (void *)my_select },
+  { "pthread_cond_timedwait", (void *)my_pthread_cond_timedwait },
 };
+
+static bool symbol_matches(const char *name, const char *target) {
+  if (strcmp(name, target) == 0) return true;
+  size_t len = strlen(target);
+  return strncmp(name, target, len) == 0 && name[len] == '$';
+}
 
 static void *replacement_for_symbol(const char *symbol) {
   if (!symbol || symbol[0] != '_') return NULL;
   const char *name = symbol + 1;
   for (size_t i = 0; i < sizeof(kRebindings) / sizeof(kRebindings[0]); i++) {
-    if (strcmp(name, kRebindings[i].name) == 0) return kRebindings[i].replacement;
+    if (symbol_matches(name, kRebindings[i].name)) return kRebindings[i].replacement;
   }
   return NULL;
 }
@@ -585,6 +860,7 @@ void xzspeed_rebind_image_named(const char *name_part) {
     if (!name || !strstr(name, name_part)) continue;
     const struct mach_header *header = _dyld_get_image_header(i);
     total += rebind_image((const struct mach_header_64 *)header, _dyld_get_image_vmaddr_slide(i));
+    flush_diag(true);
     fprintf(stderr, "[xzspeed] rebound %d timer symbols in %s\n", total, name);
     return;
   }
@@ -601,4 +877,12 @@ __attribute__((used)) static struct {
   { (const void *)my_gettimeofday, (const void *)gettimeofday },
   { (const void *)my_time, (const void *)time },
   { (const void *)my_CFAbsoluteTimeGetCurrent, (const void *)CFAbsoluteTimeGetCurrent },
+  { (const void *)my_dispatch_time, (const void *)dispatch_time },
+  { (const void *)my_dispatch_source_set_timer, (const void *)dispatch_source_set_timer },
+  { (const void *)my_pthread_cond_timedwait_relative_np, (const void *)pthread_cond_timedwait_relative_np },
+  { (const void *)my_nanosleep, (const void *)nanosleep },
+  { (const void *)my_usleep, (const void *)usleep },
+  { (const void *)my_poll, (const void *)poll },
+  { (const void *)my_select, (const void *)select },
+  { (const void *)my_pthread_cond_timedwait, (const void *)pthread_cond_timedwait },
 };

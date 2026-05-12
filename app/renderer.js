@@ -14,14 +14,16 @@ let skippedSites = [];
 let notes = [];
 let tasks = [];
 let activeNoteId = null;
+let editingProfileId = null;
+let editingAccountId = null;
 let notesSaveTimer = null;
 let settings = {
   language: 'zh-CN',
   defaultProfileId: 'main',
   restoreSession: true,
   sidebarCollapsed: false,
-  speedProfile: 'ppapi-time',
-  speedProfileVersion: 3,
+  speedProfile: 'native-ddt',
+  speedProfileVersion: 5,
   speedAutoMute: true,
 };
 let speedFactor = 1;
@@ -35,6 +37,7 @@ const HISTORY_LIMIT = 2000;
 const HISTORY_REPEAT_WRITE_MS = 30000;
 const LIST_RENDER_LIMIT = 400;
 let historySaveTimer = null;
+const PROFILE_COLORS = ['#F4A23C', '#C86B2A', '#8B4E2A', '#5B4636', '#E09F3E', '#9E6240', '#4C7A5A', '#486F9E'];
 
 const $ = (id) => document.getElementById(id);
 const $topUrl = $('url');
@@ -52,7 +55,7 @@ const SPEED_PROFILES = [
   { key: 'native-tick', code: 2, labelKey: 'speed.profile_native_tick', shortKey: 'speed.mode_native_tick_short' },
   { key: 'native-mach', code: 3, labelKey: 'speed.profile_native_mach', shortKey: 'speed.mode_native_mach_short' },
   { key: 'native-combo', code: 4, labelKey: 'speed.profile_native_combo', shortKey: 'speed.mode_native_combo_short' },
-  { key: 'native-wall', code: 5, labelKey: 'speed.profile_native_wall', shortKey: 'speed.mode_native_wall_short' },
+  { key: 'native-ddt', code: 5, labelKey: 'speed.profile_native_ddt', shortKey: 'speed.mode_native_ddt_short' },
   { key: 'native-all', code: 6, labelKey: 'speed.profile_native_all', shortKey: 'speed.mode_native_all_short' },
   { key: 'native-all-schedule', code: 7, labelKey: 'speed.profile_native_all_schedule', shortKey: 'speed.mode_native_all_schedule_short' },
 ];
@@ -82,12 +85,12 @@ async function loadStores() {
   settings.identity = settings.identity || {};
   let settingsChanged = false;
   if (!SPEED_PROFILE_KEYS.includes(settings.speedProfile)) {
-    settings.speedProfile = 'ppapi-time';
+    settings.speedProfile = 'native-ddt';
     settingsChanged = true;
   }
-  if (settings.speedProfileVersion !== 3) {
-    settings.speedProfile = 'ppapi-time';
-    settings.speedProfileVersion = 3;
+  if (settings.speedProfileVersion !== 5) {
+    settings.speedProfile = 'native-ddt';
+    settings.speedProfileVersion = 5;
     settingsChanged = true;
   }
   if (settings.speedAutoMute == null) {
@@ -176,10 +179,9 @@ function ensureProfiles() {
   if (changed) saveProfiles();
 }
 function makeProfile(name) {
-  const colors = ['#F4A23C', '#C86B2A', '#8B4E2A', '#5B4636', '#E09F3E', '#9E6240', '#4C7A5A', '#486F9E'];
   const id = 'p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
   const cleanName = String(name || '').trim() || nextProfileName();
-  return { id, name: cleanName, color: colors[profiles.length % colors.length], persistent: true, createdAt: Date.now() };
+  return { id, name: cleanName, color: PROFILE_COLORS[profiles.length % PROFILE_COLORS.length], persistent: true, createdAt: Date.now() };
 }
 function nextProfileName() {
   const base = i18n.t('prof.new_profile') || 'Profile';
@@ -220,6 +222,8 @@ function reRenderCurrent() {
   else if (currentRoute === 'recent') renderRecent();
   else if (currentRoute === 'windows') renderWindows();
   else if (currentRoute === 'profiles') renderProfiles();
+  else if (currentRoute === 'accounts') renderAccounts();
+  else if (currentRoute === 'doctor') renderDoctor();
   else if (currentRoute === 'settings') renderSettings();
   else if (currentRoute === 'notes') renderNotes();
   else if (currentRoute === 'tasks') renderTasks();
@@ -248,6 +252,8 @@ function setRoute(name) {
   else if (name === 'recent') renderRecent();
   else if (name === 'windows') renderWindows();
   else if (name === 'profiles') renderProfiles();
+  else if (name === 'accounts') renderAccounts();
+  else if (name === 'doctor') renderDoctor();
   else if (name === 'settings') renderSettings();
   else if (name === 'notes') renderNotes();
   else if (name === 'tasks') renderTasks();
@@ -759,7 +765,7 @@ function showSpeedMenu(anchor) {
   menu.appendChild(modeTitle);
   for (const profile of SPEED_PROFILES) {
     const item = document.createElement('div');
-    item.className = 'menu-item' + ((settings.speedProfile || 'ppapi-time') === profile.key ? ' check' : '');
+    item.className = 'menu-item' + ((settings.speedProfile || 'native-ddt') === profile.key ? ' check' : '');
     item.textContent = i18n.t(profile.labelKey);
     item.addEventListener('click', async (ev) => {
       ev.stopPropagation();
@@ -999,6 +1005,7 @@ function renderWindows() {
   }
   for (const t of tabs) list.appendChild(winrowEl(t));
 }
+$('win-grid-btn').addEventListener('click', () => ipcRenderer.invoke('window:tile-grid'));
 
 // ---------- Profiles ----------
 async function renderProfiles() {
@@ -1014,25 +1021,86 @@ async function renderProfiles() {
     card.className = 'profile-card';
     const isDefault = p.id === settings.defaultProfileId;
     const pwCount = pwCounts.get(p.id) || 0;
-    card.innerHTML =
-      '<div class="swatch" style="background:' + p.color + '"></div>' +
-      '<div>' +
-        '<div class="pc-name">' + escapeHtml(p.name) +
-          (isDefault ? '<span class="pc-tag default">' + escapeHtml(i18n.t('prof.default')) + '</span>' : '') +
+    const isEditing = editingProfileId === p.id;
+    if (isEditing) card.classList.add('editing');
+    const colorChoices = PROFILE_COLORS.map(color =>
+      '<button type="button" class="color-choice' + (color === p.color ? ' selected' : '') +
+      '" data-color="' + color + '" style="background:' + color + '" title="' + color + '"></button>'
+    ).join('');
+    card.innerHTML = isEditing
+      ? '<div class="swatch" data-preview style="background:' + p.color + '"></div>' +
+        '<div class="profile-edit-fields">' +
+          '<input data-field="name" value="' + escapeHtml(p.name) + '" placeholder="' + escapeHtml(i18n.t('prof.placeholder')) + '">' +
+          '<div class="color-row"><span>' + escapeHtml(i18n.t('prof.color')) + '</span>' + colorChoices + '</div>' +
+          '<div class="pc-meta"><span data-stat="cookies">…</span>' + escapeHtml(i18n.t('prof.cookies')) +
+            ' · ' + pwCount + ' ' + escapeHtml(i18n.t('prof.passwords_count')) +
+          '</div>' +
         '</div>' +
-        '<div class="pc-meta"><span data-stat="cookies">…</span>' + escapeHtml(i18n.t('prof.cookies')) +
-          ' · ' + pwCount + ' ' + escapeHtml(i18n.t('prof.passwords_count')) +
+        '<div class="pc-actions">' +
+          '<button data-act="save" class="primary">' + escapeHtml(i18n.t('common.save')) + '</button>' +
+          '<button data-act="cancel">' + escapeHtml(i18n.t('common.cancel')) + '</button>' +
+        '</div>'
+      : '<div class="swatch" style="background:' + p.color + '"></div>' +
+        '<div>' +
+          '<div class="pc-name">' + escapeHtml(p.name) +
+            (isDefault ? '<span class="pc-tag default">' + escapeHtml(i18n.t('prof.default')) + '</span>' : '') +
+          '</div>' +
+          '<div class="pc-meta"><span data-stat="cookies">…</span>' + escapeHtml(i18n.t('prof.cookies')) +
+            ' · ' + pwCount + ' ' + escapeHtml(i18n.t('prof.passwords_count')) +
+          '</div>' +
         '</div>' +
-      '</div>' +
-      '<div class="pc-actions">' +
-        '<button data-act="open">' + escapeHtml(i18n.t('prof.open_window')) + '</button>' +
-        '<button data-act="clone">' + escapeHtml(i18n.t('prof.clone_current')) + '</button>' +
-        (isDefault ? '' : '<button data-act="default" class="primary">' + escapeHtml(i18n.t('prof.set_default')) + '</button>') +
-        '<button data-act="rename">' + escapeHtml(i18n.t('prof.edit')) + '</button>' +
-        '<button data-act="clear">' + escapeHtml(i18n.t('prof.clear')) + '</button>' +
-        (p.id === 'main' ? '' : '<button data-act="delete" class="danger">' + escapeHtml(i18n.t('prof.delete')) + '</button>') +
-      '</div>';
+        '<div class="pc-actions">' +
+          '<button data-act="open">' + escapeHtml(i18n.t('prof.open_window')) + '</button>' +
+          '<button data-act="clone">' + escapeHtml(i18n.t('prof.clone_current')) + '</button>' +
+          (isDefault ? '' : '<button data-act="default" class="primary">' + escapeHtml(i18n.t('prof.set_default')) + '</button>') +
+          '<button data-act="rename">' + escapeHtml(i18n.t('prof.edit')) + '</button>' +
+          '<button data-act="clear">' + escapeHtml(i18n.t('prof.clear')) + '</button>' +
+          (p.id === 'main' ? '' : '<button data-act="delete" class="danger">' + escapeHtml(i18n.t('prof.delete')) + '</button>') +
+        '</div>';
     const q = (sel) => card.querySelector(sel);
+    if (isEditing) {
+      card.querySelectorAll('.color-choice').forEach(btn => {
+        btn.addEventListener('click', () => {
+          card.querySelectorAll('.color-choice').forEach(b => b.classList.remove('selected'));
+          btn.classList.add('selected');
+          const preview = q('[data-preview]');
+          if (preview) preview.style.background = btn.dataset.color;
+        });
+      });
+      q('[data-act="save"]').addEventListener('click', async () => {
+        const name = q('[data-field="name"]').value.trim();
+        const selected = q('.color-choice.selected');
+        if (!name) return;
+        p.name = name;
+        if (selected && selected.dataset.color) p.color = selected.dataset.color;
+        editingProfileId = null;
+        await saveProfiles();
+        refreshProfileChip();
+        renderProfiles();
+      });
+      q('[data-field="name"]').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') q('[data-act="save"]').click();
+        if (e.key === 'Escape') q('[data-act="cancel"]').click();
+      });
+      q('[data-act="cancel"]').addEventListener('click', () => {
+        editingProfileId = null;
+        renderProfiles();
+      });
+      list.appendChild(card);
+      setTimeout(() => {
+        const input = q('[data-field="name"]');
+        if (input) { input.focus(); input.select(); }
+      }, 0);
+      ipcRenderer.invoke('profile:stats', p).then((s) => {
+        if (!document.body.contains(card)) return;
+        const el = card.querySelector('[data-stat="cookies"]');
+        if (el) el.textContent = (s && Number.isFinite(s.cookies)) ? s.cookies : 0;
+      }).catch(() => {
+        const el = card.querySelector('[data-stat="cookies"]');
+        if (el) el.textContent = '0';
+      });
+      continue;
+    }
     const bt = q('[data-act="default"]'); if (bt) bt.addEventListener('click', async () => {
       settings.defaultProfileId = p.id; await saveSettings(); refreshProfileChip(); renderProfiles();
     });
@@ -1041,9 +1109,9 @@ async function renderProfiles() {
       const t = activeTab();
       ipcRenderer.invoke('window:open', t ? t.url : homeUrl, p.id);
     });
-    q('[data-act="rename"]').addEventListener('click', async () => {
-      const name = prompt(i18n.t('prof.edit') + ':', p.name);
-      if (name && name.trim()) { p.name = name.trim(); await saveProfiles(); refreshProfileChip(); renderProfiles(); }
+    q('[data-act="rename"]').addEventListener('click', () => {
+      editingProfileId = p.id;
+      renderProfiles();
     });
     q('[data-act="clear"]').addEventListener('click', async () => {
       if (!confirm(i18n.t('prof.confirm_clear'))) return;
@@ -1077,6 +1145,7 @@ $('profile-create-btn').addEventListener('click', async () => {
   ensureProfiles();
   const profile = makeProfile(nextProfileName());
   profiles.push(profile);
+  editingProfileId = profile.id;
   await saveProfiles();
   if (!settings.defaultProfileId) {
     settings.defaultProfileId = profile.id;
@@ -1085,6 +1154,258 @@ $('profile-create-btn').addEventListener('click', async () => {
   refreshProfileChip();
   updateCounts();
   renderProfiles();
+});
+
+// ---------- Accounts ----------
+function ensureAccountIds() {
+  let changed = false;
+  for (const p of passwords) {
+    if (!p.id) {
+      p.id = 'acc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+      changed = true;
+    }
+  }
+  if (changed) savePasswords();
+}
+function normalizeGameUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return homeUrl;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return raw;
+  return 'http://' + raw;
+}
+function hostFromAccountUrl(url) {
+  try { return new URL(normalizeGameUrl(url)).hostname.replace(/^www\./, ''); }
+  catch (e) { return normalizeHost(url); }
+}
+function accountTitle(account) {
+  return account.gameName || account.title || account.host || account.username || i18n.t('acct.untitled');
+}
+function accountUrl(account) {
+  return normalizeGameUrl(account.gameUrl || account.url || account.host || homeUrl);
+}
+function accountSpeed(account) {
+  const n = Number(account.speedFactor);
+  return Number.isFinite(n) && n > 0 ? Math.max(0.5, Math.min(10, n)) : 1;
+}
+async function applyAccountSpeed(account) {
+  const factor = accountSpeed(account);
+  const profile = Number.isFinite(Number(account.speedProfile)) ? Number(account.speedProfile) : speedProfileCode();
+  const next = await ipcRenderer.invoke('speed:set', factor, profile);
+  speedFactor = next || factor;
+  updateSpeedIndicator();
+  applySpeedAudioMute();
+}
+async function openAccount(account) {
+  if (!account) return;
+  await applyAccountSpeed(account);
+  ipcRenderer.invoke('window:open', accountUrl(account), account.profileId || settings.defaultProfileId);
+}
+function selectedAccounts() {
+  return Array.from(document.querySelectorAll('#acct-list input[data-account-id]:checked'))
+    .map(input => passwords.find(p => p.id === input.dataset.accountId))
+    .filter(Boolean);
+}
+async function openSelectedAccounts(grid) {
+  const selected = selectedAccounts();
+  if (!selected.length) return;
+  await applyAccountSpeed(selected[0]);
+  const payload = selected.map(account => ({
+    url: accountUrl(account),
+    profileId: account.profileId || settings.defaultProfileId,
+  }));
+  if (grid) {
+    ipcRenderer.invoke('window:open-accounts-grid', payload);
+    return;
+  }
+  payload.forEach((account, index) => {
+    setTimeout(() => ipcRenderer.invoke('window:open', account.url, account.profileId), Math.min(8000, index * 700));
+  });
+}
+function openAccountEditor(account) {
+  ensureProfiles();
+  editingAccountId = account && account.id ? account.id : null;
+  $('acct-game-name').value = account ? (account.gameName || account.title || '') : '';
+  $('acct-game-url').value = account ? accountUrl(account) : (activeTab() ? activeTab().url : homeUrl);
+  $('acct-username').value = account ? (account.username || '') : '';
+  $('acct-password').value = account ? (account.password || '') : '';
+  $('acct-note').value = account ? (account.note || '') : '';
+  $('acct-speed').value = account ? String(accountSpeed(account)) : String(speedFactor || 1);
+  const sel = $('acct-profile');
+  sel.innerHTML = '';
+  for (const p of profiles) {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.name;
+    if ((account && account.profileId === p.id) || (!account && p.id === windowProfileId)) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  $('acct-delete').style.display = account ? '' : 'none';
+  $('account-edit-modal').style.display = 'block';
+  setTimeout(() => $('acct-game-name').focus(), 30);
+}
+function closeAccountEditor() {
+  editingAccountId = null;
+  $('account-edit-modal').style.display = 'none';
+}
+async function saveAccountEditor() {
+  const gameUrl = normalizeGameUrl($('acct-game-url').value);
+  const host = hostFromAccountUrl(gameUrl);
+  const username = $('acct-username').value.trim();
+  const password = $('acct-password').value;
+  const profileId = $('acct-profile').value || settings.defaultProfileId;
+  if (!host || !password) return;
+  const existing = editingAccountId ? passwords.find(p => p.id === editingAccountId) : null;
+  const idx = existing ? passwords.indexOf(existing) :
+    passwords.findIndex(p => normalizeHost(p.host) === normalizeHost(host) && p.profileId === profileId && p.username === username);
+  const previous = idx >= 0 ? passwords[idx] : {};
+  const entry = Object.assign({}, previous, {
+    id: previous.id || editingAccountId || ('acc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8)),
+    gameName: $('acct-game-name').value.trim() || host,
+    gameUrl,
+    host,
+    username,
+    password,
+    profileId,
+    note: $('acct-note').value.trim(),
+    speedFactor: accountSpeed({ speedFactor: $('acct-speed').value }),
+    speedProfile: speedProfileCode(),
+    updatedAt: Date.now(),
+  });
+  if (idx >= 0) passwords[idx] = entry;
+  else passwords.unshift(entry);
+  await savePasswords();
+  closeAccountEditor();
+  renderAccounts();
+  if (currentRoute === 'settings') renderPasswords();
+}
+function renderAccounts() {
+  ensureAccountIds();
+  const q = ($('acct-search').value || '').toLowerCase();
+  const items = passwords.filter(account => {
+    const prof = profileById(account.profileId);
+    const text = [accountTitle(account), account.host, account.username, account.note, prof && prof.name].join(' ').toLowerCase();
+    return !q || text.includes(q);
+  });
+  $('acct-count').textContent = items.length + ' ' + i18n.t(items.length === 1 ? 'common.item' : 'common.items');
+  const list = $('acct-list');
+  list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = '<div class="placeholder" style="padding: 16px; height: auto;"><div>' + escapeHtml(i18n.t('acct.empty')) + '</div></div>';
+    return;
+  }
+  for (const account of items.slice(0, LIST_RENDER_LIMIT)) {
+    const row = document.createElement('div');
+    row.className = 'entry account-row';
+    const prof = profileById(account.profileId);
+    const title = accountTitle(account);
+    row.innerHTML =
+      '<div class="check-cell"><input type="checkbox" data-account-id="' + escapeHtml(account.id) + '"></div>' +
+      '<div class="e-cover" style="background:' + (prof ? prof.color : '#888') + '">' + escapeHtml((account.username || title || '?')[0].toUpperCase()) + '</div>' +
+      '<div class="e-text">' +
+        '<div class="e-title">' + escapeHtml(title) + ' <span style="color:var(--text-secondary);font-weight:400;font-size:11px;"> · ' + escapeHtml(account.username || '') + '</span></div>' +
+        '<div class="account-meta">' + escapeHtml(prof ? prof.name : '-') + ' · ' + escapeHtml(account.host || hostFromAccountUrl(accountUrl(account))) +
+          ' · ' + accountSpeed(account) + 'x' + (account.note ? ' · ' + escapeHtml(account.note) : '') + '</div>' +
+      '</div>' +
+      '<div class="e-actions">' +
+        '<button data-act="open">' + escapeHtml(i18n.t('common.open')) + '</button>' +
+        '<button data-act="edit">' + escapeHtml(i18n.t('prof.edit')) + '</button>' +
+        '<button data-act="del">' + escapeHtml(i18n.t('pw.delete')) + '</button>' +
+      '</div>';
+    row.querySelector('[data-act="open"]').addEventListener('click', () => openAccount(account));
+    row.querySelector('[data-act="edit"]').addEventListener('click', () => openAccountEditor(account));
+    row.querySelector('[data-act="del"]').addEventListener('click', async () => {
+      if (!confirm(i18n.t('acct.confirm_delete'))) return;
+      const i = passwords.indexOf(account);
+      if (i >= 0) passwords.splice(i, 1);
+      await savePasswords();
+      renderAccounts();
+    });
+    list.appendChild(row);
+  }
+}
+$('acct-search').addEventListener('input', renderAccounts);
+$('acct-add-btn').addEventListener('click', () => openAccountEditor(null));
+$('acct-open-selected').addEventListener('click', () => openSelectedAccounts(false));
+$('acct-grid-selected').addEventListener('click', () => openSelectedAccounts(true));
+$('acct-cancel').addEventListener('click', closeAccountEditor);
+$('acct-save').addEventListener('click', saveAccountEditor);
+$('acct-delete').addEventListener('click', async () => {
+  const account = editingAccountId ? passwords.find(p => p.id === editingAccountId) : null;
+  if (!account) return;
+  if (!confirm(i18n.t('acct.confirm_delete'))) return;
+  const i = passwords.indexOf(account);
+  if (i >= 0) passwords.splice(i, 1);
+  await savePasswords();
+  closeAccountEditor();
+  renderAccounts();
+});
+
+// ---------- Game Doctor ----------
+function doctorProfile() {
+  ensureProfiles();
+  return profileById(windowProfileId) || profileById(settings.defaultProfileId) || profiles[0] || null;
+}
+function doctorLog(message) {
+  const el = $('doctor-log');
+  if (!el) return;
+  el.textContent = message ? (new Date().toLocaleTimeString() + ' · ' + message) : '';
+}
+function renderDoctor() {
+  const tab = activeTab();
+  const profile = doctorProfile();
+  const speed = Math.round((speedFactor || 1) * 100) / 100;
+  const url = tab ? (tab.title && tab.title !== tab.url ? tab.title + ' · ' + tab.url : tab.url) : i18n.t('doctor.no_tab');
+  $('doctor-current').textContent = (profile ? profile.name : '-') + ' · ' + speed + 'x · ' + url;
+}
+async function clearDoctorProfile(profile) {
+  if (!profile) return false;
+  await ipcRenderer.invoke('profile:clear', profile);
+  return true;
+}
+async function resetDoctorTab() {
+  await setSpeedFactor(1);
+  const tab = activeTab();
+  if (tab) {
+    tab.fit = false;
+    tab.zoom = 1;
+    try { tab.webview.setZoomFactor(1); } catch (e) {}
+    try {
+      if (typeof tab.webview.reloadIgnoringCache === 'function') tab.webview.reloadIgnoringCache();
+      else tab.webview.reload();
+    } catch (e) {}
+  }
+  updateZoomIndicator();
+  renderDoctor();
+}
+$('doctor-repair').addEventListener('click', async () => {
+  const profile = doctorProfile();
+  if (profile && !confirm(i18n.t('doctor.confirm_profile'))) return;
+  doctorLog('');
+  await clearDoctorProfile(profile);
+  await resetDoctorTab();
+  doctorLog(i18n.t('doctor.done'));
+});
+$('doctor-reset-tab').addEventListener('click', async () => {
+  doctorLog('');
+  await resetDoctorTab();
+  doctorLog(i18n.t('doctor.done'));
+});
+$('doctor-clear-profile').addEventListener('click', async () => {
+  const profile = doctorProfile();
+  if (!profile || !confirm(i18n.t('doctor.confirm_profile'))) return;
+  doctorLog('');
+  await clearDoctorProfile(profile);
+  doctorLog(i18n.t('doctor.done'));
+});
+$('doctor-clear-all').addEventListener('click', async () => {
+  if (!confirm(i18n.t('doctor.confirm_all'))) return;
+  doctorLog('');
+  await ipcRenderer.invoke('data:clear-cookies-cache-all');
+  doctorLog(i18n.t('doctor.done'));
+});
+$('doctor-tile-grid').addEventListener('click', async () => {
+  const result = await ipcRenderer.invoke('window:tile-grid');
+  doctorLog(i18n.t('doctor.done') + ' ' + ((result && result.tiled) || 0) + ' ' + i18n.t('common.windows'));
 });
 
 // ---------- Settings ----------
@@ -1247,11 +1568,24 @@ $('sp-save').addEventListener('click', async () => {
   const { host, profileId } = pendingSavePrompt;
   const cleanHost = normalizeHost(host);
   const idx = passwords.findIndex(p => normalizeHost(p.host) === cleanHost && p.profileId === profileId && p.username === u);
-  const entry = { host: cleanHost, username: u, password: pw, profileId, updatedAt: Date.now() };
+  const previous = idx >= 0 ? passwords[idx] : {};
+  const entry = Object.assign({}, previous, {
+    id: previous.id || ('acc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8)),
+    gameName: previous.gameName || cleanHost,
+    gameUrl: previous.gameUrl || normalizeGameUrl(cleanHost),
+    host: cleanHost,
+    username: u,
+    password: pw,
+    profileId,
+    speedFactor: previous.speedFactor || 1,
+    speedProfile: previous.speedProfile == null ? speedProfileCode() : previous.speedProfile,
+    updatedAt: Date.now(),
+  });
   if (idx >= 0) passwords[idx] = entry; else passwords.unshift(entry);
   await savePasswords();
   hideSavePrompt();
   if (currentRoute === 'settings') renderPasswords();
+  else if (currentRoute === 'accounts') renderAccounts();
 });
 $('sp-not-now').addEventListener('click', () => hideSavePrompt());
 $('sp-never').addEventListener('click', async () => {
@@ -1336,17 +1670,31 @@ $('ap-add-save').addEventListener('click', async () => {
   const profileId = $('ap-add-profile').value;
   if (!host || !password) return;
   const idx = passwords.findIndex(p => p.host === host && p.profileId === profileId && p.username === username);
-  const entry = { host, username, password, profileId, updatedAt: Date.now() };
+  const previous = idx >= 0 ? passwords[idx] : {};
+  const entry = Object.assign({}, previous, {
+    id: previous.id || ('acc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8)),
+    gameName: previous.gameName || host,
+    gameUrl: previous.gameUrl || normalizeGameUrl(host),
+    host,
+    username,
+    password,
+    profileId,
+    speedFactor: previous.speedFactor || 1,
+    speedProfile: previous.speedProfile == null ? speedProfileCode() : previous.speedProfile,
+    updatedAt: Date.now(),
+  });
   if (idx >= 0) passwords[idx] = entry; else passwords.unshift(entry);
   await savePasswords();
   closeAddPasswordModal();
   renderPasswords();
+  if (currentRoute === 'accounts') renderAccounts();
 });
 
 function updateCounts() {
   if (currentRoute === 'favorites') renderFavorites();
   else if (currentRoute === 'recent') renderRecent();
   else if (currentRoute === 'windows') renderWindows();
+  else if (currentRoute === 'accounts') renderAccounts();
 }
 
 // ---------- Notes ----------

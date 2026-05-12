@@ -487,6 +487,21 @@
     .profile-card .pc-actions button.danger:hover { background: var(--deep-orange); color: #fff; border-color: transparent; }
     .profile-card .pc-actions button.primary { background: var(--main-orange); color: #fff; border-color: transparent; }
     .profile-card .pc-actions button.primary:hover { background: var(--deep-orange); }
+    .profile-card.editing { align-items: start; }
+    .profile-edit-fields { min-width: 240px; }
+    .profile-edit-fields input {
+      width: 100%; height: 32px; box-sizing: border-box;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--panel-white); color: var(--text-primary);
+      padding: 0 10px; outline: none; font: inherit;
+    }
+    .profile-edit-fields input:focus { border-color: var(--main-orange); box-shadow: 0 0 0 2px rgba(244, 162, 60, 0.16); }
+    .color-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--text-secondary); font-size: 11px; }
+    .color-choice {
+      width: 22px; height: 22px; border-radius: 6px;
+      border: 2px solid transparent; cursor: default;
+    }
+    .color-choice.selected { border-color: var(--dark-brown); box-shadow: 0 0 0 2px rgba(255,255,255,0.9) inset; }
 
     /* Password save prompt banner */
     #save-prompt {
@@ -517,6 +532,28 @@
     #save-prompt .sp-actions button.primary { background: var(--main-orange); color: #fff; border-color: transparent; }
     #save-prompt .sp-actions button.primary:hover { background: var(--deep-orange); }
     #save-prompt .sp-actions button:hover { background: var(--soft-wheat); }
+
+    #account-edit-modal .sp-row {
+      display: flex; gap: 8px; align-items: center; margin-bottom: 8px;
+    }
+    #account-edit-modal .sp-row label { width: 70px; font-size: 11px; color: var(--text-secondary); }
+    #account-edit-modal .sp-row input,
+    #account-edit-modal .sp-row select {
+      flex: 1; min-width: 0; height: 28px; padding: 0 10px;
+      background: var(--panel-white); border: 1px solid var(--border); border-radius: 8px;
+      outline: none; font: inherit; color: var(--text-primary);
+    }
+    #account-edit-modal .sp-row input:focus,
+    #account-edit-modal .sp-row select:focus { border-color: var(--main-orange); background: #fff; }
+    #account-edit-modal .sp-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+    #account-edit-modal .sp-actions button {
+      font: inherit; padding: 6px 12px; border-radius: 8px;
+      background: var(--panel-white); color: var(--warm-brown);
+      border: 1px solid var(--border); cursor: default;
+    }
+    #account-edit-modal .sp-actions button:hover { background: var(--soft-wheat); }
+    #account-edit-modal #acct-save { background: var(--main-orange); color: #fff; border-color: transparent; }
+    #account-edit-modal #acct-delete { margin-right: auto; color: var(--deep-orange); }
 
     /* Account picker */
     #account-picker {
@@ -724,6 +761,38 @@
     .menu .menu-item .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .menu .menu-item.check::before { content: "✓"; margin-right: 4px; color: var(--main-orange); width: 10px; }
     .menu .menu-item:not(.check)::before { content: " "; margin-right: 4px; width: 10px; }
+
+    .tool-row {
+      display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0;
+    }
+    .tool-row input, .tool-row select {
+      height: 32px; box-sizing: border-box; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--panel-white); color: var(--text-primary);
+      padding: 0 10px; outline: none; font: inherit;
+    }
+    .tool-row button, .doctor-actions button {
+      font: inherit; padding: 7px 12px; border-radius: 8px;
+      background: var(--panel-white); color: var(--warm-brown);
+      border: 1px solid var(--border); cursor: default;
+    }
+    .tool-row button.primary, .doctor-actions button.primary {
+      background: var(--main-orange); color: #fff; border-color: transparent;
+    }
+    .account-row .check-cell { display: flex; align-items: center; justify-content: center; }
+    .account-row input[type="checkbox"] { width: 16px; height: 16px; }
+    .account-meta { color: var(--text-secondary); font-size: 11px; margin-top: 4px; }
+    .doctor-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px; margin-top: 14px;
+    }
+    .doctor-card {
+      background: var(--panel-white-2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px;
+    }
+    .doctor-card h3 { margin: 0 0 8px; font-size: 14px; color: var(--dark-brown); }
+    .doctor-card p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; word-break: break-word; }
+    .doctor-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    #doctor-log { margin-top: 12px; color: var(--text-secondary); font-size: 12px; }
   </style>
 </head>
 <body>
@@ -757,7 +826,9 @@
         <div class="nav-section" data-i18n="sidebar.section.session">Session</div>
         <div class="nav-item" data-route="windows"><div class="icon"></div><span data-i18n="sidebar.windows">Windows</span></div>
         <div class="nav-item" data-route="profiles"><div class="icon"></div><span data-i18n="sidebar.profiles">Profiles</span></div>
+        <div class="nav-item" data-route="accounts"><div class="icon emoji">A</div><span data-i18n="sidebar.accounts">Accounts</span></div>
         <div class="nav-section" data-i18n="sidebar.section.tools">Tools</div>
+        <div class="nav-item" data-route="doctor"><div class="icon emoji">D</div><span data-i18n="sidebar.doctor">Doctor</span></div>
         <div class="nav-item" data-route="notes"><div class="icon emoji">📝</div><span data-i18n="sidebar.notes">Notes</span></div>
         <div class="nav-item" data-route="tasks"><div class="icon emoji">✓</div><span data-i18n="sidebar.tasks">Tasks</span></div>
         <div class="nav-section" data-i18n="sidebar.section.app">App</div>
@@ -826,6 +897,9 @@
       <!-- WINDOWS -->
       <div id="route-windows" class="route">
         <div class="list-head"><div class="title" data-i18n="win.title"></div><div class="count" id="win-count"></div></div>
+        <div class="tool-row">
+          <button id="win-grid-btn" class="primary" data-i18n="win.grid"></button>
+        </div>
         <div style="margin-top: 16px;" id="win-list"></div>
       </div>
 
@@ -837,6 +911,51 @@
           <button id="profile-create-btn" class="btn" style="padding: 6px 12px; border-radius: 8px; background: var(--main-orange); color: #fff; border: 0; cursor: default; font: inherit;" data-i18n="prof.create"></button>
         </div>
         <div id="profile-list"></div>
+      </div>
+
+      <!-- ACCOUNTS -->
+      <div id="route-accounts" class="route">
+        <div class="list-head"><div class="title" data-i18n="acct.title"></div><div class="count" id="acct-count"></div></div>
+        <div class="list-head" style="margin-top: 4px;"><div class="subtitle" data-i18n="acct.subtitle"></div></div>
+        <div class="tool-row">
+          <input id="acct-search" style="flex:1; min-width: 220px;" data-i18n-placeholder="acct.search" />
+          <button id="acct-add-btn" class="primary" data-i18n="acct.add"></button>
+          <button id="acct-open-selected" data-i18n="acct.open_selected"></button>
+          <button id="acct-grid-selected" data-i18n="acct.open_grid"></button>
+        </div>
+        <div id="acct-list"></div>
+      </div>
+
+      <!-- DOCTOR -->
+      <div id="route-doctor" class="route">
+        <div class="list-head"><div class="title" data-i18n="doctor.title"></div></div>
+        <div class="list-head" style="margin-top: 4px;"><div class="subtitle" data-i18n="doctor.subtitle"></div></div>
+        <div class="doctor-grid">
+          <div class="doctor-card">
+            <h3 data-i18n="doctor.current"></h3>
+            <p id="doctor-current"></p>
+            <div class="doctor-actions">
+              <button id="doctor-repair" class="primary" data-i18n="doctor.repair"></button>
+              <button id="doctor-reset-tab" data-i18n="doctor.reset_tab"></button>
+            </div>
+          </div>
+          <div class="doctor-card">
+            <h3 data-i18n="doctor.data"></h3>
+            <p data-i18n="doctor.data_desc"></p>
+            <div class="doctor-actions">
+              <button id="doctor-clear-profile" data-i18n="doctor.clear_profile"></button>
+              <button id="doctor-clear-all" data-i18n="doctor.clear_all"></button>
+            </div>
+          </div>
+          <div class="doctor-card">
+            <h3 data-i18n="doctor.layout"></h3>
+            <p data-i18n="doctor.layout_desc"></p>
+            <div class="doctor-actions">
+              <button id="doctor-tile-grid" data-i18n="doctor.tile_grid"></button>
+            </div>
+          </div>
+        </div>
+        <div id="doctor-log"></div>
       </div>
 
       <!-- NOTES -->
@@ -1060,6 +1179,23 @@
         <button id="le-cancel" style="font: inherit; padding: 6px 12px; border-radius: 8px; background: var(--panel-white); color: var(--warm-brown); border: 1px solid var(--border); cursor: default;" data-i18n="common.cancel"></button>
         <button id="le-save" style="font: inherit; padding: 6px 12px; border-radius: 8px; background: var(--main-orange); color: #fff; border: 0; cursor: default;" data-i18n="common.save"></button>
       </div>
+    </div>
+  </div>
+
+  <!-- Account edit modal -->
+  <div id="account-edit-modal" style="position: fixed; top: 56px; right: 20px; z-index: 55; background: var(--panel-white-2); border: 1px solid var(--border-strong); border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow-lg); width: 400px; display: none;">
+    <div style="font-weight: 700; color: var(--dark-brown); margin-bottom: 10px;" data-i18n="acct.edit_title"></div>
+    <div class="sp-row"><label data-i18n="acct.game_name"></label><input id="acct-game-name" /></div>
+    <div class="sp-row"><label data-i18n="acct.game_url"></label><input id="acct-game-url" /></div>
+    <div class="sp-row"><label data-i18n="pw.username"></label><input id="acct-username" /></div>
+    <div class="sp-row"><label data-i18n="pw.password"></label><input id="acct-password" type="password" /></div>
+    <div class="sp-row"><label data-i18n="pw.profile"></label><select id="acct-profile"></select></div>
+    <div class="sp-row"><label data-i18n="acct.speed"></label><input id="acct-speed" placeholder="1.0" /></div>
+    <div class="sp-row"><label data-i18n="acct.note"></label><input id="acct-note" /></div>
+    <div class="sp-actions">
+      <button id="acct-delete" data-i18n="pw.delete"></button>
+      <button id="acct-cancel" data-i18n="common.cancel"></button>
+      <button id="acct-save" data-i18n="common.save"></button>
     </div>
   </div>
 

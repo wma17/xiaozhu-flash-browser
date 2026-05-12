@@ -15,7 +15,11 @@ process.on('unhandledRejection', (err) => dlog('UNHANDLED: ' + (err && err.stack
 
 const homeUrl = configuration.appUrl || 'https://www.4399.com/';
 const resizable = configuration.resizable !== false;
-const speedMode = process.argv.includes('--xz-speed-mode') || process.env.XZFLASH_ENABLE_SPEED_HOOK === '1';
+const DEFAULT_SPEED_PROFILE_CODE = 5; // 6th UI mode: DDT recommended (Tick + mach)
+const speedDisabled = process.argv.includes('--xz-no-speed-mode') || process.env.XZFLASH_DISABLE_SPEED_HOOK === '1';
+const speedRequested = process.argv.includes('--xz-speed-mode') || process.env.XZFLASH_ENABLE_SPEED_HOOK === '1';
+const speedMode = process.platform === 'darwin' ? !speedDisabled : speedRequested;
+let speedHookEnabled = false;
 const initialLaunchUrl = firstLaunchUrlArg();
 
 const windows = new Set();
@@ -24,32 +28,52 @@ const profileStatsCache = new Map();
 const PROFILE_STATS_TTL = 30000;
 
 // Keep Flash games responsive, especially when multi-opening accounts.
+const disabledFeatures = [
+  'CalculateNativeWinOcclusion',
+  'BackForwardCache',
+  'IsolateOrigins',
+  'site-per-process',
+  'AudioServiceOutOfProcess',
+  'MediaRouter',
+  'OptimizationHints',
+  'Translate',
+];
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
-app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,BackForwardCache');
+app.commandLine.appendSwitch('disable-features', disabledFeatures.join(','));
+app.commandLine.appendSwitch('disable-site-isolation-trials');
+app.commandLine.appendSwitch('process-per-site');
+app.commandLine.appendSwitch('renderer-process-limit', '6');
 app.commandLine.appendSwitch('disable-extensions');
 app.commandLine.appendSwitch('disable-component-extensions-with-background-pages');
 app.commandLine.appendSwitch('disable-default-apps');
 app.commandLine.appendSwitch('disable-sync');
 app.commandLine.appendSwitch('disable-translate');
 app.commandLine.appendSwitch('disable-domain-reliability');
+app.commandLine.appendSwitch('disable-background-networking');
+app.commandLine.appendSwitch('disable-client-side-phishing-detection');
+app.commandLine.appendSwitch('disable-print-preview');
+app.commandLine.appendSwitch('disable-speech-api');
+app.commandLine.appendSwitch('disable-hang-monitor');
 app.commandLine.appendSwitch('disable-smooth-scrolling');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
+app.commandLine.appendSwitch('enable-zero-copy');
 app.commandLine.appendSwitch('disk-cache-size', String(256 * 1024 * 1024));
 app.commandLine.appendSwitch('media-cache-size', String(128 * 1024 * 1024));
 
-// --- Sealed Flash speed experiment ---
-// The experimental speed engine is kept for future research but is disabled
-// in normal launches. Use --xz-speed-mode or XZFLASH_ENABLE_SPEED_HOOK=1 only
-// when intentionally testing it.
+// --- Flash speed control ---
+// Official macOS builds use the safe speed shim by default. Launch with
+// --xz-no-speed-mode or XZFLASH_DISABLE_SPEED_HOOK=1 to force original Flash.
 const LEGACY_SPEED_FILE = path.join(os.homedir(), '.xzflash-speed');
 const SPEED_FILE = path.join(os.tmpdir(), 'xzflash-speed-' + (process.getuid ? process.getuid() : 'user'));
+const SPEED_DIAG_FILE = path.join(os.tmpdir(), 'xzflash-speed-diag-' + (process.getuid ? process.getuid() : 'user') + '.json');
 const SPEED_NOTIFY_NAME = 'com.xiaozhu.flash.speed.' + (process.getuid ? process.getuid() : 'user');
 process.env.XZFLASH_SPEED_FILE = SPEED_FILE;
+process.env.XZFLASH_SPEED_DIAG_FILE = SPEED_DIAG_FILE;
 process.env.XZFLASH_SPEED_NOTIFY_NAME = SPEED_NOTIFY_NAME;
 function clampSpeedFactor(value) {
   const n = Number(value);
@@ -58,10 +82,10 @@ function clampSpeedFactor(value) {
 }
 function clampSpeedProfile(value) {
   const n = Number(value);
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(7, Math.round(n)));
+  if (!Number.isFinite(n)) return DEFAULT_SPEED_PROFILE_CODE;
+  return Math.max(0, Math.min(8, Math.round(n)));
 }
-function writeSpeedState(value, profile = 0) {
+function writeSpeedState(value, profile = DEFAULT_SPEED_PROFILE_CODE) {
   const factor = clampSpeedFactor(value);
   const mode = clampSpeedProfile(profile);
   try {
@@ -88,10 +112,10 @@ function readSpeedState() {
       raw: parts.join(' '),
     };
   } catch (e) {
-    return { factor: 1, profile: 0, raw: '' };
+    return { factor: 1, profile: DEFAULT_SPEED_PROFILE_CODE, raw: '' };
   }
 }
-function publishSpeedFactor(value, profile = 0) {
+function publishSpeedFactor(value, profile = DEFAULT_SPEED_PROFILE_CODE) {
   if (!speedMode) return;
   const speed = Math.round(clampSpeedFactor(value) * 1000);
   const mode = clampSpeedProfile(profile);
@@ -105,10 +129,10 @@ function firstLaunchUrlArg() {
   return null;
 }
 // Always start at 1x so a previous accelerated session cannot affect login.
-writeSpeedState(1, 0);
+writeSpeedState(1, DEFAULT_SPEED_PROFILE_CODE);
 process.env.XZFLASH_SPEED_FACTOR = String(readSpeedFactor());
-process.env.XZFLASH_SPEED_PROFILE = '0';
-publishSpeedFactor(1, 0);
+process.env.XZFLASH_SPEED_PROFILE = String(DEFAULT_SPEED_PROFILE_CODE);
+publishSpeedFactor(1, DEFAULT_SPEED_PROFILE_CODE);
 
 // --- Flash plugin ---
 let pluginName, pluginVersion;
@@ -125,7 +149,12 @@ switch (process.platform) {
 let pluginPath = path.join(__dirname, 'plugins', pluginName);
 if (process.platform === 'darwin' && speedMode) {
   const shimPlugin = path.join(__dirname, 'plugins', 'PepperFlashPlayerSpeed.plugin');
-  if (fs.existsSync(shimPlugin)) pluginPath = shimPlugin;
+  if (fs.existsSync(shimPlugin)) {
+    pluginPath = shimPlugin;
+    speedHookEnabled = true;
+  } else {
+    dlog('speed shim missing, falling back to original Flash: ' + shimPlugin);
+  }
 }
 app.commandLine.appendSwitch('ppapi-flash-path', pluginPath);
 app.commandLine.appendSwitch('ppapi-flash-version', pluginVersion);
@@ -153,8 +182,8 @@ function seedDefaults() {
       defaultProfileId: 'main',
       restoreSession: true,
       sidebarCollapsed: false,
-      speedProfile: 'ppapi-time',
-      speedProfileVersion: 3,
+      speedProfile: 'native-ddt',
+      speedProfileVersion: 5,
       speedAutoMute: true,
     });
   }
@@ -199,13 +228,34 @@ ipcMain.handle('window:open-many', (_e, url, profileIds) => {
   uniqueIds.forEach((id, index) => {
     const open = () => createBrowserWindowWithUrl(targetUrl, id);
     if (index === 0) open();
-    else setTimeout(open, Math.min(4000, index * 350));
+    else setTimeout(open, Math.min(6000, index * 650));
   });
   return { queued: uniqueIds.length };
 });
+ipcMain.handle('window:open-accounts-grid', (_e, accounts) => {
+  const list = Array.isArray(accounts) ? accounts.filter(a => a && a.profileId) : [];
+  const total = list.length;
+  list.forEach((account, index) => {
+    const open = () => createBrowserWindowWithUrl(account.url || homeUrl, account.profileId, {
+      bounds: gridBounds(index, total),
+    });
+    if (index === 0) open();
+    else setTimeout(open, Math.min(8000, index * 700));
+  });
+  return { queued: total };
+});
+ipcMain.handle('window:tile-grid', () => {
+  const wins = Array.from(windows).filter(w => !w.isDestroyed());
+  const total = wins.length;
+  wins.forEach((win, index) => {
+    try { win.setBounds(gridBounds(index, total), true); } catch (e) {}
+  });
+  return { tiled: total };
+});
 ipcMain.handle('speed:get', () => readSpeedFactor());
 ipcMain.handle('speed:state', () => readSpeedState());
-ipcMain.handle('speed:hook-enabled', () => speedMode);
+ipcMain.handle('speed:diag-path', () => SPEED_DIAG_FILE);
+ipcMain.handle('speed:hook-enabled', () => speedHookEnabled);
 ipcMain.handle('speed:set', (_e, factor, profile) => {
   const next = writeSpeedState(factor, profile);
   process.env.XZFLASH_SPEED_FACTOR = String(next.factor);
@@ -307,8 +357,9 @@ ipcMain.handle('task:cancel', (_e, taskId) => { cancelTimer(taskId); return true
 // --- Clear history/cookies/cache helpers ---
 ipcMain.handle('data:clear-cookies-cache-all', async () => {
   profileStatsCache.clear();
+  const storages = ['cookies', 'localstorage', 'indexdb', 'websql', 'serviceworkers', 'cachestorage', 'filesystem', 'shadercache'];
   for (const ses of [session.defaultSession]) {
-    await ses.clearStorageData({ storages: ['cookies', 'cachestorage'] });
+    await ses.clearStorageData({ storages });
     await ses.clearCache();
   }
   // Also clear each profile's partition
@@ -318,7 +369,7 @@ ipcMain.handle('data:clear-cookies-cache-all', async () => {
     if (!part) continue;
     try {
       const ses = session.fromPartition(part);
-      await ses.clearStorageData({ storages: ['cookies', 'cachestorage'] });
+      await ses.clearStorageData({ storages });
       await ses.clearCache();
     } catch (e) {}
   }
@@ -333,10 +384,26 @@ function broadcast(...args) {
   for (const w of windows) w.webContents.send(...args);
 }
 
-function createBrowserWindowWithUrl(initialUrl, profileId) {
+function gridBounds(index, total) {
   const wa = screen.getPrimaryDisplay().workArea;
+  const count = Math.max(1, total || 1);
+  const cols = count <= 1 ? 1 : count === 2 ? 2 : Math.ceil(Math.sqrt(count));
+  const rows = Math.ceil(count / cols);
+  const col = index % cols;
+  const row = Math.floor(index / cols);
+  return {
+    x: Math.round(wa.x + col * wa.width / cols),
+    y: Math.round(wa.y + row * wa.height / rows),
+    width: Math.round(wa.width / cols),
+    height: Math.round(wa.height / rows),
+  };
+}
+
+function createBrowserWindowWithUrl(initialUrl, profileId, options = {}) {
+  const wa = screen.getPrimaryDisplay().workArea;
+  const bounds = options.bounds || { x: wa.x, y: wa.y, width: wa.width, height: wa.height };
   const win = new BrowserWindow({
-    x: wa.x, y: wa.y, width: wa.width, height: wa.height,
+    x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
     autoHideMenuBar: true,
     resizable,
     fullscreenable: resizable,
@@ -381,7 +448,7 @@ app.on('activate', () => {
 
 app.on('ready', function() {
   seedDefaults();
-  writeSpeedState(readSpeedFactor(), 0);
+  writeSpeedState(readSpeedFactor(), DEFAULT_SPEED_PROFILE_CODE);
   // Defer reminder scheduling so the window paints first.
   setTimeout(scheduleAllTasks, 200);
   const template = [

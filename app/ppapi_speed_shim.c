@@ -50,7 +50,7 @@ typedef void (*PPP_ShutdownModule_Fn)(void);
 typedef const void *(*PPP_GetInterface_Fn)(const char *interface_name);
 typedef void (*XZSpeed_RebindImage_Fn)(const char *name_part);
 
-#define SPEED_PROFILE_MAX 7
+#define SPEED_PROFILE_MAX 8
 
 static void *g_real = NULL;
 static void *g_speed_interposer = NULL;

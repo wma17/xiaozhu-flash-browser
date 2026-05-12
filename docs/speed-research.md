@@ -4,15 +4,19 @@
 
 ## 当前状态
 
-- 普通启动只加载原始 `PepperFlashPlayer.plugin`。
-- 变速按钮在普通界面隐藏。
-- `scripts/sync-to-app.sh` 默认不会构建 `PepperFlashPlayerSpeed.plugin`。
-- 实验源码仍保留在 `app/ppapi_speed_shim.c` 和 `app/xzspeed.c`。
+- macOS 正式启动默认加载 `PepperFlashPlayerSpeed.plugin`，但每次启动都先回到 `1x`，避免上次加速影响登录。
+- 默认正式档位是第 6 档 `弹弹堂推荐（Tick + mach）`。这是当前测试里能变速、又避开 wall-clock 卡死路径的保守默认。
+- `scripts/sync-to-app.sh` 默认会构建并同步 `PepperFlashPlayerSpeed.plugin`。如需强制原始 Flash，可用 `BUILD_SPEED_SHIM=0 scripts/sync-to-app.sh` 或启动参数 `--xz-no-speed-mode`。
+- 速度源码保留在 `app/ppapi_speed_shim.c` 和 `app/xzspeed.c`。
+- 实验模式现在会写诊断文件：`/tmp/xzflash-speed-diag-$(id -u).json`。里面记录 Flash 实际命中的时间/调度符号、调用次数，以及是否被当前 profile 改写。
+- 用户测试显示：第 3 档会让游戏界面切换变快；第 4 档能实现变速；第 5 档也能变速运行；旧第 6 档墙上时间源会直接卡住。
+- 因此主线改为避开 wall-clock：第 6 档现在是弹弹堂推荐组合 `Tick + mach`；第 7/8 档也不再包含墙上时间源；wall-clock 只保留为第 9 档危险诊断。
+- 第 8 档 `Safe native + cautious schedule` 会额外尝试保守调度加速：`dispatch_time`、`dispatch_source_set_timer`、`nanosleep`、`usleep`、`pthread_cond_timedwait*` 可缩短等待；`poll/select` 只有在没有 fd 的纯 sleep 用法下才缩短，避免把网络等待一起加速。
 - 继续研究时需要显式运行：
 
 ```bash
-BUILD_SPEED_SHIM=1 scripts/sync-to-app.sh
-open -n /Applications/小竹Flash浏览器.app --args --xz-speed-mode
+scripts/sync-to-app.sh
+open -n /Applications/小竹Flash浏览器.app
 ```
 
 ## Windows 样本观察
@@ -36,6 +40,7 @@ open -n /Applications/小竹Flash浏览器.app --args --xz-speed-mode
 - PPAPI 层包装 `PPB_Core.GetTime` / `GetTimeTicks`。
 - PPAPI 层包装 `CallOnMainThread` / `PPB_MessageLoop.PostWork`。
 - 原生层重绑定 `mach_absolute_time`、`TickCount`、`clock_gettime`、`gettimeofday`、`time`、`CFAbsoluteTimeGetCurrent`。
+- 原生层继续重绑定 `dispatch_time`、`dispatch_source_set_timer`、`pthread_cond_timedwait_relative_np`、`pthread_cond_timedwait`、`nanosleep`、`usleep`、`poll`、`select$1050`。
 - 从 1 到 8 档拆分不同时间源，便于逐档测试。
 
 测试现象：
@@ -50,12 +55,34 @@ open -n /Applications/小竹Flash浏览器.app --args --xz-speed-mode
 - Flash 内部时间源被粗暴加速时，游戏逻辑、渲染、网络心跳或 worker 调度可能一起被扰乱。
 - M 系列 Mac 上整条 Flash 路径是 x86_64 Rosetta，原生 hook 更脆弱。
 
+## 当前测试办法
+
+1. 同步正式版并打开：
+
+```bash
+scripts/sync-to-app.sh
+open -n /Applications/小竹Flash浏览器.app
+```
+
+2. 打开弹弹堂或其他 Flash 游戏，正式默认先用第 6 档。建议每个档位先用 `1.1x`，稳定后再试 `1.25x`、`1.5x`。第 9 档 wall-clock 已不放在正式菜单里，只用于手工诊断。
+
+3. 玩 30 秒后查看诊断文件：
+
+```bash
+cat /tmp/xzflash-speed-diag-$(id -u).json
+```
+
+重点看：
+
+- `calls > 0`：说明 Flash 确实命中了这个符号。
+- `changed > 0`：说明当前 profile 实际改写了这个符号。
+- `dispatch_*`、`nanosleep/usleep`、`pthread_cond_timedwait*` 是否有大量调用：这会决定下一步是否继续往调度方向推进。
+
 ## 后续方向
 
 优先考虑低风险诊断，而不是继续硬加速：
 
-- 在实验模式中加入“实际命中的符号统计”，确认 Flash 是否调用了被 hook 的函数。
-- 只记录不修改，先确认 `TickCount`、`mach_absolute_time`、`clock_gettime` 的调用频率。
+- 根据诊断文件确认 Flash 是否主要依赖调度、原生 tick，还是 PPAPI 时间。
 - 尝试帧限幅：虚拟时间不持续快跑，而是限制每次最大推进量。
 - 尝试只影响 ActionScript `getTimer` 相关路径，避免影响网络、SSL、等待和调度。
 - 将实验日志显示到菜单或诊断页，避免靠体感猜测。
