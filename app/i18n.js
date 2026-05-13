@@ -1,7 +1,7 @@
 const dicts = {
   en: {
-    'brand.name': '小竹',
-    'brand.sub': 'Flash Browser',
+    'brand.name': '小竹 Orange Ver',
+    'brand.sub': 'Little Orange Special',
     'sidebar.home': 'Home',
     'sidebar.library': 'Library',
     'sidebar.favorites': 'Favorites',
@@ -14,7 +14,7 @@ const dicts = {
     'sidebar.section.app': 'App',
     'sidebar.settings': 'Settings',
     'sidebar.about': 'About',
-    'sidebar.bubble': 'Take a break, play a classic.',
+    'sidebar.bubble': 'Good luck, fortune, and one more classic run.',
     'sidebar.toggle': 'Toggle sidebar (⌘\\)',
 
     'topbar.url_placeholder': 'Search games, paste URL, or open local page…',
@@ -30,7 +30,12 @@ const dicts = {
     'greet.evening': 'Good evening,',
     'greet.night': 'Still up,',
 
-    'home.subtitle': 'Revisit the classics. Relive the golden age of browser games.',
+    'home.subtitle': 'Good luck, fortune, and classic Flash adventures.',
+    'home.orange_eyebrow': 'Little Orange Special',
+    'home.orange_title': 'Good Luck, Fortune, Super Luck',
+    'home.orange_sub': 'A custom Flash browser dressed for the Orange Witch Journey.',
+    'home.orange_note': 'Open the game, choose a profile, and let today start lucky.',
+    'home.greeting_name': 'Little Orange',
     'home.continue': 'Continue Playing',
     'home.favorites': 'Favorites',
     'home.quick': 'Quick Access',
@@ -290,7 +295,7 @@ const dicts = {
     'more.about': 'About',
 
     'about.feedback': 'Feedback',
-    'about.creator': 'Original by 竹小春三零',
+    'about.creator': 'Xiaozhu Flash Browser Orange Ver · Little Orange special edition · Original by 竹小春三零',
     'about.feedback_hint': 'Email bugs, ideas, or a friendly hello.',
 
     'sidebar.shortcuts': 'Shortcuts',
@@ -322,8 +327,8 @@ const dicts = {
   },
 
   'zh-CN': {
-    'brand.name': '小竹',
-    'brand.sub': 'Flash 浏览器',
+    'brand.name': '小竹 Orange Ver',
+    'brand.sub': '小橙子特别版',
     'sidebar.home': '首页',
     'sidebar.library': '游戏库',
     'sidebar.favorites': '收藏',
@@ -336,7 +341,7 @@ const dicts = {
     'sidebar.section.app': '应用',
     'sidebar.settings': '设置',
     'sidebar.about': '关于',
-    'sidebar.bubble': '累了就来玩一把吧。',
+    'sidebar.bubble': '好运、发财、超好运，开局顺一点。',
     'sidebar.toggle': '显示/隐藏侧栏 (⌘\\)',
 
     'topbar.url_placeholder': '搜索游戏、输入网址，或打开本地页面…',
@@ -352,7 +357,12 @@ const dicts = {
     'greet.evening': '晚上好，',
     'greet.night': '还没睡呀，',
 
-    'home.subtitle': '回到过去，再玩一次那些经典的网页游戏。',
+    'home.subtitle': '好运、发财、超好运，一起回到经典网页游戏。',
+    'home.orange_eyebrow': '小橙子特别版',
+    'home.orange_title': '好运、发财、超好运',
+    'home.orange_sub': '为小橙子定制的 Flash 游戏浏览器主题。',
+    'home.orange_note': '打开游戏、选好档案，今天也从好运开始。',
+    'home.greeting_name': '小橙子',
     'home.continue': '继续游玩',
     'home.favorites': '我的收藏',
     'home.quick': '快速入口',
@@ -612,7 +622,7 @@ const dicts = {
     'more.about': '关于',
 
     'about.feedback': '意见反馈',
-    'about.creator': '原创：竹小春三零',
+    'about.creator': '小竹Flash浏览器 Orange Ver · 小橙子特别版 · 原创：竹小春三零',
     'about.feedback_hint': 'Bug、想法、或只是打个招呼都欢迎。',
 
     'sidebar.shortcuts': '快捷键',

@@ -2,24 +2,27 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>小竹Flash浏览器</title>
+  <title>小竹Flash浏览器 Orange Ver</title>
   <style>
     :root {
-      --cream-bg:     #F7E8D1;
-      --cream-bg-2:   #F1DEC0;
-      --soft-wheat:   #FFD8A6;
-      --main-orange:  #F4A23C;
-      --deep-orange:  #C86B2A;
-      --warm-brown:   #8B4E2A;
-      --dark-brown:   #5B4636;
-      --panel-white:  #FFF8EC;
-      --panel-white-2:#FFFDF6;
-      --text-primary: #3A2A1F;
-      --text-secondary: #7A6654;
-      --border:       rgba(139, 78, 42, 0.18);
-      --border-strong:rgba(139, 78, 42, 0.32);
-      --shadow:       0 4px 14px rgba(139, 78, 42, 0.10);
-      --shadow-lg:    0 10px 28px rgba(139, 78, 42, 0.14);
+      --cream-bg:     #FFF4DC;
+      --cream-bg-2:   #E9F5D2;
+      --soft-wheat:   #FFE0A3;
+      --main-orange:  #FF9F1C;
+      --deep-orange:  #E66E1A;
+      --leaf-green:   #5FA64A;
+      --leaf-deep:    #387A38;
+      --leaf-soft:    #DDF0BE;
+      --warm-brown:   #7A4A24;
+      --dark-brown:   #3E3224;
+      --panel-white:  #FFFBEF;
+      --panel-white-2:#FFFFF7;
+      --text-primary: #322719;
+      --text-secondary: #6C7055;
+      --border:       rgba(95, 166, 74, 0.22);
+      --border-strong:rgba(95, 166, 74, 0.36);
+      --shadow:       0 4px 14px rgba(71, 117, 48, 0.11);
+      --shadow-lg:    0 10px 28px rgba(71, 117, 48, 0.16);
       --sidebar-w:    224px;
     }
     * { box-sizing: border-box; }
@@ -35,8 +38,9 @@
       content: "";
       position: fixed; inset: 0;
       background:
-        radial-gradient(1000px 520px at 0% 0%, rgba(255, 216, 166, 0.5), transparent 60%),
-        radial-gradient(1100px 600px at 100% 100%, rgba(244, 162, 60, 0.12), transparent 60%);
+        radial-gradient(1000px 520px at 0% 0%, rgba(255, 224, 163, 0.52), transparent 60%),
+        radial-gradient(920px 560px at 100% 0%, rgba(221, 240, 190, 0.70), transparent 62%),
+        radial-gradient(1100px 600px at 100% 100%, rgba(95, 166, 74, 0.14), transparent 60%);
       pointer-events: none;
       z-index: 0;
     }
@@ -82,7 +86,11 @@
       border: 1px solid var(--border);
     }
     #profile-chip:hover { background: var(--soft-wheat); color: var(--dark-brown); }
-    #profile-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--main-orange); }
+    #profile-chip .dot {
+      width: 18px; height: 18px; border-radius: 50%; background: var(--main-orange);
+      background-size: cover; background-position: center;
+      box-shadow: 0 0 0 1px rgba(255,255,255,.9), 0 0 0 2px rgba(95,166,74,.20);
+    }
 
     /* ========== Layout ========== */
     #layout { flex: 1; display: flex; min-height: 0; }
@@ -121,8 +129,8 @@
       padding: 8px 10px; margin: 2px 0; border-radius: 10px;
       cursor: default; color: var(--text-primary); white-space: nowrap;
     }
-    .nav-item:hover { background: rgba(255, 216, 166, 0.55); }
-    .nav-item.active { background: var(--soft-wheat); color: var(--dark-brown); font-weight: 600; }
+    .nav-item:hover { background: rgba(221, 240, 190, 0.72); }
+    .nav-item.active { background: var(--leaf-soft); color: var(--leaf-deep); font-weight: 700; border: 1px solid rgba(95, 166, 74, 0.22); }
     .nav-item .icon {
       width: 22px; height: 22px;
       background-size: contain; background-repeat: no-repeat; background-position: center;
@@ -134,7 +142,12 @@
     .nav-item[data-route="recent"] .icon    { background-image: url(assets/nav_recent.png); }
     .nav-item[data-route="windows"] .icon   { background-image: url(assets/nav_windows.png); }
     .nav-item[data-route="profiles"] .icon  { background-image: url(assets/nav_profiles.png); }
+    .nav-item[data-route="accounts"] .icon  { background-image: url(assets/nav_accounts.png); }
+    .nav-item[data-route="doctor"] .icon    { background-image: url(assets/nav_doctor.png); }
+    .nav-item[data-route="notes"] .icon     { background-image: url(assets/nav_notes.png); }
+    .nav-item[data-route="tasks"] .icon     { background-image: url(assets/nav_tasks.png); }
     .nav-item[data-route="settings"] .icon  { background-image: url(assets/nav_settings.png); }
+    .nav-item[data-route="shortcuts"] .icon { background-image: url(assets/nav_shortcuts.png); }
     .nav-item[data-route="about"] .icon     { background-image: url(assets/nav_about.png); }
     .nav-item .icon.emoji {
       display: flex; align-items: center; justify-content: center;
@@ -156,7 +169,7 @@
     }
     #sidebar-footer .bubble {
       font-size: 11px; color: var(--text-secondary); text-align: center;
-      background: var(--cream-bg-2); padding: 6px 10px; border-radius: 10px;
+      background: var(--leaf-soft); padding: 6px 10px; border-radius: 10px;
       border: 1px dashed var(--border);
     }
 
@@ -164,6 +177,66 @@
     #main { flex: 1; min-width: 0; position: relative; overflow: hidden; }
     .route { position: absolute; inset: 0; display: none; overflow: auto; padding: 28px 36px 40px 36px; }
     .route.active { display: block; }
+    #route-home {
+      isolation: isolate;
+      background:
+        linear-gradient(90deg, rgba(255, 244, 220, .94), rgba(255, 244, 220, .74) 46%, rgba(233, 245, 210, .72)),
+        radial-gradient(900px 460px at 44% 8%, rgba(255, 224, 163, .38), transparent 66%);
+    }
+    #route-home > :not(.home-character-bg) { position: relative; z-index: 1; }
+    .home-character-bg {
+      position: absolute; inset: 0;
+      min-height: 980px;
+      overflow: hidden;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .home-character-bg::after {
+      content: ""; position: absolute; inset: 0;
+      background: linear-gradient(180deg, transparent 0, rgba(255,244,220,.16) 44%, rgba(255,244,220,.86) 84%);
+    }
+    .home-character {
+      position: absolute;
+      height: min(74vh, 720px);
+      min-height: 520px;
+      width: auto;
+      object-fit: contain;
+      object-position: center bottom;
+      opacity: .22;
+      filter: drop-shadow(0 18px 28px rgba(122, 74, 36, .18));
+    }
+    .home-character.fortune { left: 7%; top: 22px; }
+    .home-character.lucky { left: 50%; top: 0; transform: translateX(-50%); opacity: .24; }
+    .home-character.super { right: 6%; top: 28px; opacity: .23; }
+    .orange-home-copy {
+      max-width: 520px;
+      margin: 2px 0 22px;
+      padding: 12px 14px 12px 16px;
+      border-left: 4px solid var(--main-orange);
+      border-radius: 12px;
+      background: rgba(255, 251, 239, .78);
+      box-shadow: var(--shadow);
+      color: var(--dark-brown);
+      text-shadow: 0 1px 0 rgba(255,255,255,0.88);
+    }
+    .orange-home-copy .eyebrow {
+      font-size: 11px; color: var(--deep-orange); font-weight: 800;
+      letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 8px;
+    }
+    .orange-home-copy .hero-title {
+      font-size: 18px; font-weight: 800; line-height: 1.18;
+    }
+    .orange-home-copy .hero-sub {
+      margin-top: 7px; font-size: 11px; line-height: 1.45; color: var(--warm-brown);
+    }
+    @media (max-width: 900px) {
+      .home-character-bg { min-height: 760px; }
+      .home-character { min-height: 380px; height: 52vh; opacity: .16; }
+      .home-character.fortune { left: -12%; top: 72px; }
+      .home-character.lucky { left: 52%; top: 34px; }
+      .home-character.super { right: -14%; top: 82px; }
+      .orange-home-copy { max-width: 460px; }
+    }
 
     /* Reusable */
     .section-head {
@@ -261,6 +334,13 @@
       display: flex; align-items: center; justify-content: center;
       font-weight: 900; color: rgba(91, 70, 54, 0.5);
     }
+    .entry .e-cover.avatar-cover {
+      border-radius: 50%;
+      background-size: cover;
+      background-position: center;
+      color: transparent;
+      box-shadow: 0 0 0 1px rgba(255,255,255,.9), 0 0 0 2px rgba(95,166,74,.18);
+    }
     .entry .e-text { flex: 1; min-width: 0; }
     .entry .e-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .entry .e-url { color: var(--text-secondary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -300,7 +380,11 @@
     #tab-strip .tab.muted { border-color: rgba(200, 107, 42, .32); }
     #tab-strip .tab.muted .t-title { color: var(--text-secondary); }
     #tab-strip .tab .t-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
-    #tab-strip .tab .spinner { width: 10px; height: 10px; border: 2px solid var(--main-orange); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; display: none; }
+    #tab-strip .tab .spinner {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: url(assets/optional/loading_orange.png) center/contain no-repeat;
+      animation: spin .9s linear infinite; display: none;
+    }
     #tab-strip .tab.loading .spinner { display: inline-block; }
     #tab-strip .tab .pdot { width: 6px; height: 6px; border-radius: 50%; background: var(--main-orange); }
     #tab-strip .tab .detach, #tab-strip .tab .close {
@@ -314,10 +398,19 @@
     #tab-strip .zc { display: flex; align-items: center; gap: 2px; margin-left: 8px; }
     #tab-strip .zoom-ind { min-width: 64px; text-align: center; font-size: 11px; color: var(--text-secondary); padding: 3px 10px; background: var(--cream-bg-2); border-radius: 8px; border: 1px solid var(--border); cursor: default; user-select: none; }
     #tab-strip .zoom-ind:hover { background: var(--soft-wheat); color: var(--dark-brown); border-color: var(--border-strong); }
-    #tab-strip .speed-ind { min-width: 58px; text-align: center; font-size: 11px; color: var(--dark-brown); padding: 3px 10px; background: #EAF4EA; border-radius: 8px; border: 1px solid rgba(76, 122, 90, .28); cursor: default; user-select: none; }
+    #tab-strip .speed-ind {
+      min-width: 72px; text-align: center; font-size: 11px; color: var(--dark-brown);
+      padding: 3px 10px 3px 26px;
+      background-color: #EEF8DF;
+      background-image: url(assets/tools/tool_speed.png);
+      background-position: 7px center;
+      background-repeat: no-repeat;
+      background-size: 15px 15px;
+      border-radius: 8px; border: 1px solid rgba(95, 166, 74, .30); cursor: default; user-select: none;
+    }
     #tab-strip .speed-ind.sealed { display: none; }
-    #tab-strip .speed-ind:hover { background: #D7ECD8; border-color: rgba(76, 122, 90, .5); }
-    #tab-strip .speed-ind.hot { background: #FFE8A8; border-color: rgba(200, 107, 42, .38); color: var(--deep-orange); }
+    #tab-strip .speed-ind:hover { background-color: #DDF0BE; border-color: rgba(95, 166, 74, .5); }
+    #tab-strip .speed-ind.hot { background-color: #FFE8A8; border-color: rgba(230, 110, 26, .42); color: var(--deep-orange); }
     #tab-strip .tool-ind {
       min-width: 46px; height: 22px; display: flex; align-items: center; justify-content: center;
       box-sizing: border-box; padding: 0 8px; border-radius: 8px;
@@ -329,15 +422,28 @@
     #tab-strip .tool-ind.on { background: #FFE8A8; color: var(--deep-orange); border-color: rgba(200, 107, 42, .38); }
     #tab-strip .tool-ind.disabled { opacity: .45; pointer-events: none; }
     .game-tools-menu .menu-item {
-      min-width: 190px; justify-content: space-between;
+      min-width: 208px; justify-content: space-between;
+    }
+    .game-tools-menu .tool-label { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+    .game-tools-menu .tool-icon {
+      width: 18px; height: 18px; flex-shrink: 0;
+      background-size: contain; background-position: center; background-repeat: no-repeat;
     }
     .game-tools-menu .state {
-      margin-left: auto; color: var(--deep-orange); font-weight: 700;
+      margin-left: auto; color: var(--leaf-deep); font-weight: 800;
     }
     #tab-strip #new-tab-btn { padding: 4px 10px; border-radius: 8px; background: var(--cream-bg-2); color: var(--warm-brown); font-size: 16px; border: 1px solid var(--border); }
     #tab-strip #new-tab-btn:hover { background: var(--main-orange); color: #fff; border-color: transparent; }
-    #tab-strip #game-mode-btn { padding: 4px 9px; border-radius: 8px; background: var(--cream-bg-2); color: var(--warm-brown); font-size: 13px; border: 1px solid var(--border); cursor: default; }
-    #tab-strip #game-mode-btn:hover { background: #D7ECD8; border-color: rgba(76, 122, 90, .5); color: #31593B; }
+    #tab-strip #game-mode-btn {
+      width: 28px; height: 22px; padding: 0; border-radius: 8px;
+      background-color: var(--cream-bg-2);
+      background-image: url(assets/tools/tool_game_mode.png);
+      background-position: center;
+      background-repeat: no-repeat;
+      background-size: 17px 17px;
+      color: transparent; font-size: 0; border: 1px solid var(--border); cursor: default;
+    }
+    #tab-strip #game-mode-btn:hover { background-color: var(--leaf-soft); border-color: rgba(95, 166, 74, .5); }
 
     @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -437,6 +543,9 @@
       padding: 28px; display: flex; flex-direction: column; align-items: center; gap: 12px;
     }
     .about-card .a-badge { width: 96px; height: 96px; background: url(assets/badge.png) center/contain no-repeat; }
+    .orange-cast { display: flex; align-items: end; justify-content: center; gap: 8px; width: 100%; margin-top: 2px; }
+    .orange-cast img { width: 84px; height: 112px; object-fit: contain; filter: drop-shadow(0 3px 6px rgba(139, 78, 42, 0.16)); }
+    .orange-cast img:nth-child(2) { width: 92px; height: 126px; }
     .about-card h2 { margin: 0; color: var(--dark-brown); font-size: 20px; }
     .about-card .ver { color: var(--text-secondary); font-size: 12px; }
     .about-card p { color: var(--text-secondary); font-size: 13px; line-height: 1.6; margin: 10px 0 0 0; text-align: center; }
@@ -489,9 +598,14 @@
     .profile-card {
       background: var(--panel-white-2); border: 1px solid var(--border); border-radius: 14px;
       padding: 14px; margin-bottom: 10px;
-      display: grid; grid-template-columns: 40px 1fr auto; gap: 14px; align-items: center;
+      display: grid; grid-template-columns: 52px 1fr auto; gap: 14px; align-items: center;
     }
     .profile-card .swatch { width: 40px; height: 40px; border-radius: 10px; }
+    .profile-card .profile-avatar {
+      width: 52px; height: 52px; border-radius: 16px;
+      background-size: cover; background-position: center;
+      box-shadow: 0 0 0 1px rgba(255,255,255,.95), 0 0 0 2px rgba(95,166,74,.20);
+    }
     .profile-card .pc-name { font-weight: 700; color: var(--dark-brown); display: flex; align-items: center; gap: 8px; }
     .profile-card .pc-tag { font-size: 10px; padding: 2px 8px; border-radius: 6px; background: var(--soft-wheat); color: var(--dark-brown); }
     .profile-card .pc-tag.default { background: var(--main-orange); color: #fff; }
@@ -597,6 +711,7 @@
       width: 28px; height: 28px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
       color: #fff; font-size: 11px; font-weight: 700; flex-shrink: 0;
+      background-size: cover; background-position: center;
     }
     .ap-account .ap-main { flex: 1; min-width: 0; }
     .ap-account .ap-user { font-weight: 600; color: var(--dark-brown); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -642,7 +757,8 @@
       accent-color: var(--main-orange);
     }
     .profile-open-swatch {
-      width: 20px; height: 20px; border-radius: 6px;
+      width: 28px; height: 28px; border-radius: 50%;
+      background-size: cover; background-position: center;
       box-shadow: 0 0 0 1px rgba(0,0,0,0.06) inset;
       flex-shrink: 0;
     }
@@ -889,8 +1005,8 @@
       <div id="brand">
         <div class="badge"></div>
         <div class="text">
-          <div class="name" data-i18n="brand.name">竹小春三零</div>
-          <div class="sub" data-i18n="brand.sub">Browser</div>
+          <div class="name" data-i18n="brand.name">小竹 Orange Ver</div>
+          <div class="sub" data-i18n="brand.sub">小橙子特别版</div>
         </div>
       </div>
       <div id="nav-list">
@@ -901,25 +1017,35 @@
         <div class="nav-section" data-i18n="sidebar.section.session">Session</div>
         <div class="nav-item" data-route="windows"><div class="icon"></div><span data-i18n="sidebar.windows">Windows</span></div>
         <div class="nav-item" data-route="profiles"><div class="icon"></div><span data-i18n="sidebar.profiles">Profiles</span></div>
-        <div class="nav-item" data-route="accounts"><div class="icon emoji">A</div><span data-i18n="sidebar.accounts">Accounts</span></div>
+        <div class="nav-item" data-route="accounts"><div class="icon"></div><span data-i18n="sidebar.accounts">Accounts</span></div>
         <div class="nav-section" data-i18n="sidebar.section.tools">Tools</div>
-        <div class="nav-item" data-route="doctor"><div class="icon emoji">D</div><span data-i18n="sidebar.doctor">Doctor</span></div>
-        <div class="nav-item" data-route="notes"><div class="icon emoji">📝</div><span data-i18n="sidebar.notes">Notes</span></div>
-        <div class="nav-item" data-route="tasks"><div class="icon emoji">✓</div><span data-i18n="sidebar.tasks">Tasks</span></div>
+        <div class="nav-item" data-route="doctor"><div class="icon"></div><span data-i18n="sidebar.doctor">Doctor</span></div>
+        <div class="nav-item" data-route="notes"><div class="icon"></div><span data-i18n="sidebar.notes">Notes</span></div>
+        <div class="nav-item" data-route="tasks"><div class="icon"></div><span data-i18n="sidebar.tasks">Tasks</span></div>
         <div class="nav-section" data-i18n="sidebar.section.app">App</div>
         <div class="nav-item" data-route="settings"><div class="icon"></div><span data-i18n="sidebar.settings">Settings</span></div>
-        <div class="nav-item" data-route="shortcuts"><div class="icon emoji">⌘</div><span data-i18n="sidebar.shortcuts">Shortcuts</span></div>
+        <div class="nav-item" data-route="shortcuts"><div class="icon"></div><span data-i18n="sidebar.shortcuts">Shortcuts</span></div>
         <div class="nav-item" data-route="about"><div class="icon"></div><span data-i18n="sidebar.about">About</span></div>
       </div>
       <div id="sidebar-footer">
         <div class="mascot"></div>
-        <div class="bubble" data-i18n="sidebar.bubble">Take a break, play a classic.</div>
+        <div class="bubble" data-i18n="sidebar.bubble">好运、发财、超好运，开局顺一点。</div>
       </div>
     </div>
     <div id="main">
       <!-- HOME -->
       <div id="route-home" class="route active">
-        <div class="greet"><span id="greet-text">Good evening,</span> <span class="dot" data-i18n="brand.name">竹小春三零</span>.</div>
+        <div class="home-character-bg" aria-hidden="true">
+          <img class="home-character fortune" src="assets/characters/char_lucky_orange.png" alt="">
+          <img class="home-character lucky" src="assets/characters/char_fortune_orange.png" alt="">
+          <img class="home-character super" src="assets/characters/char_super_lucky_orange.png" alt="">
+        </div>
+        <div class="orange-home-copy">
+          <div class="eyebrow" data-i18n="home.orange_eyebrow">小橙子特别版</div>
+          <div class="hero-title" data-i18n="home.orange_title">好运、发财、超好运</div>
+          <div class="hero-sub" data-i18n="home.orange_sub">为小橙子定制的 Flash 游戏浏览器主题。</div>
+        </div>
+        <div class="greet"><span id="greet-text">Good evening,</span> <span class="dot" data-i18n="home.greeting_name">小橙子</span>.</div>
         <div class="greet-sub" data-i18n="home.subtitle"></div>
         <div class="section-head"><div class="title" data-i18n="home.continue"></div><div class="link" data-route-link="recent" data-i18n="home.view_all"></div></div>
         <div class="grid" id="home-continue"></div>
@@ -1152,8 +1278,13 @@
       <div id="route-about" class="route">
         <div class="about-card">
           <div class="a-badge"></div>
-          <h2 data-i18n="brand.name">竹小春三零</h2>
-          <div class="ver"><span data-i18n="about.version"></span> 1.4.0 — DDT Speed</div>
+          <h2 data-i18n="brand.name">小橙子</h2>
+          <div class="ver"><span data-i18n="about.version"></span> 1.4.1 — Orange Special</div>
+          <div class="orange-cast" aria-hidden="true">
+            <img src="assets/characters/char_lucky_orange.png" alt="">
+            <img src="assets/characters/char_fortune_orange.png" alt="">
+            <img src="assets/characters/char_super_lucky_orange.png" alt="">
+          </div>
           <p><span data-i18n="about.tagline"></span><br><span data-i18n="about.built_for"></span></p>
           <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); width: 100%; text-align: center;">
             <div style="font-size: 12px; color: var(--dark-brown); font-weight: 700;" data-i18n="about.creator"></div>

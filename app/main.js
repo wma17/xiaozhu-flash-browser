@@ -179,7 +179,7 @@ function seedDefaults() {
   if (!fs.existsSync(storePath('settings'))) {
     writeJson('settings', {
       language: 'zh-CN',
-      defaultProfileId: 'main',
+      defaultProfileId: 'lucky-orange',
       restoreSession: true,
       sidebarCollapsed: false,
       speedProfile: 'native-ddt',
@@ -190,8 +190,9 @@ function seedDefaults() {
   }
   if (!fs.existsSync(storePath('profiles'))) {
     writeJson('profiles', [
-      { id: 'main',      name: 'Main',      color: '#F4A23C', persistent: true,  createdAt: Date.now() },
-      { id: 'alt',       name: 'Alt',       color: '#C86B2A', persistent: true,  createdAt: Date.now() },
+      { id: 'lucky-orange',       name: '好运小橙子', color: '#FF9F1C', persistent: true,  createdAt: Date.now() },
+      { id: 'fortune-orange',     name: '发财小橙子', color: '#E66E1A', persistent: true,  createdAt: Date.now() },
+      { id: 'super-lucky-orange', name: '超好运橙子', color: '#5FA64A', persistent: true,  createdAt: Date.now() },
     ]);
   }
 }
@@ -261,7 +262,7 @@ ipcMain.handle('audio:set-global-muted', (_e, muted) => {
 ipcMain.handle('screenshot:save', (_e, pngBytes, title) => {
   const rawName = String(title || 'game').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim() || 'game';
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const fileName = '小竹截图-' + rawName.slice(0, 40) + '-' + stamp + '.png';
+  const fileName = '小竹Orange截图-' + rawName.slice(0, 40) + '-' + stamp + '.png';
   const filePath = path.join(app.getPath('desktop'), fileName);
   fs.writeFileSync(filePath, Buffer.from(pngBytes));
   return { path: filePath };
@@ -421,7 +422,7 @@ function createBrowserWindowWithUrl(initialUrl, profileId, options = {}) {
     autoHideMenuBar: true,
     resizable,
     fullscreenable: resizable,
-    title: '小竹Flash浏览器',
+    title: '小竹Flash浏览器 Orange Ver',
     backgroundColor: '#F7E8D1',
     webPreferences: {
       plugins: true,

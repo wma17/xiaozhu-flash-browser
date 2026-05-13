@@ -1,8 +1,8 @@
 {
   "name": "xiaozhu-flash-browser",
-  "productName": "小竹Flash浏览器",
+  "productName": "小竹Flash浏览器 Orange Ver",
   "version": "1.4.1",
-  "description": "小竹Flash浏览器 — 专为经典 Flash 网页游戏打造的暖色系 macOS 浏览器。原创：竹小春三零。",
+  "description": "小竹Flash浏览器 Orange Ver — 小橙子特别版，专为经典 Flash 网页游戏打造。",
   "main": "main.js",
   "license": "MIT"
 }

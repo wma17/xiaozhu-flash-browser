@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_BUNDLE="${APP_BUNDLE:-/Applications/小竹Flash浏览器.app}"
+APP_NAME="$(plutil -extract productName raw -o - "$ROOT/app/package.json")"
+APP_BUNDLE="${APP_BUNDLE:-/Applications/$APP_NAME.app}"
 APP_RESOURCES="$APP_BUNDLE/Contents/Resources/app"
 SRC_PLUGIN="$APP_RESOURCES/plugins/PepperFlashPlayer.plugin"
 DST_PLUGIN="$APP_RESOURCES/plugins/PepperFlashPlayerSpeed.plugin"

@@ -19,7 +19,7 @@ let editingAccountId = null;
 let notesSaveTimer = null;
 let settings = {
   language: 'zh-CN',
-  defaultProfileId: 'main',
+  defaultProfileId: 'lucky-orange',
   restoreSession: true,
   sidebarCollapsed: false,
   speedProfile: 'native-ddt',
@@ -40,6 +40,11 @@ const HISTORY_REPEAT_WRITE_MS = 30000;
 const LIST_RENDER_LIMIT = 400;
 let historySaveTimer = null;
 const PROFILE_COLORS = ['#F4A23C', '#C86B2A', '#8B4E2A', '#5B4636', '#E09F3E', '#9E6240', '#4C7A5A', '#486F9E'];
+const PROFILE_AVATARS = [
+  'assets/optional/avatar_lucky_orange.png',
+  'assets/optional/avatar_fortune_orange.png',
+  'assets/optional/avatar_super_lucky_orange.png',
+];
 
 const $ = (id) => document.getElementById(id);
 const $topUrl = $('url');
@@ -158,6 +163,25 @@ function domainLetter(url) {
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+function placeholderHtml(text, iconPath, style) {
+  const icon = iconPath ? '<div class="ph-icon" style="background-image:url(' + escapeHtml(iconPath) + ')"></div>' : '';
+  return '<div class="placeholder" style="' + (style || '') + '">' + icon + '<div>' + escapeHtml(text) + '</div></div>';
+}
+function profileIndex(profile) {
+  const i = profiles.findIndex(p => profile && p.id === profile.id);
+  return i >= 0 ? i : 0;
+}
+function profileAvatarPath(profile, index) {
+  const text = ((profile && profile.id) || '') + ' ' + ((profile && profile.name) || '');
+  if (/超好运|super/i.test(text)) return 'assets/optional/avatar_super_lucky_orange.png';
+  if (/发财|fortune|alt/i.test(text)) return 'assets/optional/avatar_fortune_orange.png';
+  if (/好运|lucky|main/i.test(text)) return 'assets/optional/avatar_lucky_orange.png';
+  return PROFILE_AVATARS[(Number.isFinite(index) ? index : profileIndex(profile)) % PROFILE_AVATARS.length];
+}
+function profileAvatarStyle(profile, index) {
+  const color = (profile && profile.color) || '#888';
+  return 'background-color:' + escapeHtml(color) + ';background-image:url(' + escapeHtml(profileAvatarPath(profile, index)) + ');';
+}
 function formatTime(ts) {
   if (!ts) return '';
   const d = new Date(ts);
@@ -172,7 +196,9 @@ function ensureProfiles() {
   if (!Array.isArray(profiles)) profiles = [];
   if (!profiles.length) {
     profiles = [
-      { id: 'main', name: 'Main', color: '#F4A23C', persistent: true, createdAt: Date.now() },
+      { id: 'lucky-orange', name: '好运小橙子', color: '#FF9F1C', persistent: true, createdAt: Date.now() },
+      { id: 'fortune-orange', name: '发财小橙子', color: '#E66E1A', persistent: true, createdAt: Date.now() },
+      { id: 'super-lucky-orange', name: '超好运橙子', color: '#5FA64A', persistent: true, createdAt: Date.now() },
     ];
     changed = true;
   }
@@ -556,13 +582,26 @@ function updateGameToolsButton() {
   btn.textContent = i18n.t('tools.toolbar');
   btn.title = i18n.t('tools.game');
 }
+const TOOL_ICON_BY_KEY = {
+  'tools.repair_page': 'tool_repair.png',
+  'tools.screenshot': 'tool_screenshot.png',
+  'tools.multi_open': 'tool_multiopen.png',
+  'tools.quick_note': 'tool_note.png',
+  'tools.global_mute': 'tool_mute.png',
+  'tools.tab_mute': 'tool_mute.png',
+};
+function toolLabelHtml(labelKey) {
+  const icon = TOOL_ICON_BY_KEY[labelKey];
+  const iconHtml = icon ? '<span class="tool-icon" style="background-image:url(assets/tools/' + icon + ')"></span>' : '';
+  return '<span class="tool-label">' + iconHtml + '<span>' + escapeHtml(i18n.t(labelKey)) + '</span></span>';
+}
 function menuState(on) {
   return on ? i18n.t('tools.on') : i18n.t('tools.off');
 }
 function addToolToggle(menu, labelKey, on, onClick, enabled = true) {
   const item = document.createElement('div');
   item.className = 'menu-item' + (on ? ' check' : '') + (enabled ? '' : ' disabled');
-  item.innerHTML = '<span>' + escapeHtml(i18n.t(labelKey)) + '</span><span class="state">' + escapeHtml(menuState(on)) + '</span>';
+  item.innerHTML = toolLabelHtml(labelKey) + '<span class="state">' + escapeHtml(menuState(on)) + '</span>';
   if (enabled) {
     item.addEventListener('click', async (ev) => {
       ev.stopPropagation();
@@ -575,7 +614,7 @@ function addToolToggle(menu, labelKey, on, onClick, enabled = true) {
 function addToolAction(menu, labelKey, onClick, enabled = true) {
   const item = document.createElement('div');
   item.className = 'menu-item' + (enabled ? '' : ' disabled');
-  item.innerHTML = '<span>' + escapeHtml(i18n.t(labelKey)) + '</span>';
+  item.innerHTML = toolLabelHtml(labelKey);
   if (enabled) {
     item.addEventListener('click', async (ev) => {
       ev.stopPropagation();
@@ -668,7 +707,7 @@ function showProfileOpenModal() {
     const current = p.id === windowProfileId ? i18n.t('profile_open.current') : '';
     row.innerHTML =
       '<input type="checkbox" data-profile-id="' + escapeHtml(p.id) + '"' + (selectedIds.includes(p.id) ? ' checked' : '') + ' />' +
-      '<span class="profile-open-swatch" style="background:' + escapeHtml(p.color || '#888') + '"></span>' +
+      '<span class="profile-open-swatch" style="' + profileAvatarStyle(p, profileIndex(p)) + '"></span>' +
       '<span class="profile-open-main">' +
         '<span class="profile-open-name">' + escapeHtml(p.name || p.id) + '</span>' +
         '<span class="profile-open-meta">' + escapeHtml(current) + '</span>' +
@@ -779,7 +818,7 @@ $('zoom-indicator').addEventListener('click', (ev) => {
 function refreshProfileChip() {
   const p = profileById(windowProfileId) || defaultProfile();
   if (!p) return;
-  $('profile-chip').querySelector('.dot').style.background = p.color;
+  $('profile-chip').querySelector('.dot').style.cssText = profileAvatarStyle(p, profileIndex(p));
   $('profile-chip-name').textContent = p.name;
 }
 
@@ -1093,7 +1132,7 @@ function renderHomeContinue() {
   const c = $('home-continue'); c.innerHTML = '';
   const items = uniqueRecentByHost(6);
   if (!items.length) {
-    c.innerHTML = '<div class="placeholder" style="grid-column: 1/-1; padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('home.empty_history')) + '</div></div>';
+    c.innerHTML = placeholderHtml(i18n.t('home.empty_history'), 'assets/optional/empty_recent.png', 'grid-column: 1/-1; padding: 20px; height: auto;');
     return;
   }
   for (const e of items) c.appendChild(cardEl(e, () => openUrl(e.url)));
@@ -1102,7 +1141,7 @@ function renderHomeFavorites() {
   const c = $('home-favorites'); c.innerHTML = '';
   const items = bookmarks.filter(b => b.favorite !== false).slice(0, 6);
   if (!items.length) {
-    c.innerHTML = '<div class="placeholder" style="grid-column: 1/-1; padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('home.empty_favorites')) + '</div></div>';
+    c.innerHTML = placeholderHtml(i18n.t('home.empty_favorites'), 'assets/optional/empty_favorites.png', 'grid-column: 1/-1; padding: 20px; height: auto;');
     return;
   }
   for (const e of items) c.appendChild(cardEl(e, () => openUrl(e.url)));
@@ -1110,7 +1149,7 @@ function renderHomeFavorites() {
 function renderHomeWindows() {
   const c = $('home-windows'); c.innerHTML = '';
   if (!tabs.length) {
-    c.innerHTML = '<div class="placeholder" style="padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('home.empty_windows')) + '</div></div>';
+    c.innerHTML = placeholderHtml(i18n.t('home.empty_windows'), 'assets/optional/empty_recent.png', 'padding: 20px; height: auto;');
     return;
   }
   for (const t of tabs) c.appendChild(winrowEl(t));
@@ -1141,6 +1180,10 @@ function renderFavorites() {
   const items = q ? base.filter(b => (b.title || '').toLowerCase().includes(q) || (b.url || '').toLowerCase().includes(q)) : base;
   $('fav-count').textContent = items.length + ' ' + i18n.t(items.length === 1 ? 'common.item' : 'common.items');
   const list = $('fav-list'); list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = placeholderHtml(i18n.t('home.empty_favorites'), 'assets/optional/empty_favorites.png', 'padding: 20px; height: auto;');
+    return;
+  }
   for (const e of items.slice(0, LIST_RENDER_LIMIT)) list.appendChild(entryEl(e, 'fav'));
 }
 function renderRecent() {
@@ -1148,6 +1191,10 @@ function renderRecent() {
   const items = q ? history.filter(h => (h.title || '').toLowerCase().includes(q) || (h.url || '').toLowerCase().includes(q)) : history;
   $('rec-count').textContent = items.length + ' ' + i18n.t(items.length === 1 ? 'common.item' : 'common.items');
   const list = $('rec-list'); list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = placeholderHtml(i18n.t('home.empty_history'), 'assets/optional/empty_recent.png', 'padding: 20px; height: auto;');
+    return;
+  }
   for (const e of items.slice(0, LIST_RENDER_LIMIT)) list.appendChild(entryEl(e, 'rec'));
 }
 function entryEl(e, kind) {
@@ -1228,7 +1275,7 @@ async function renderProfiles() {
           '<button data-act="save" class="primary">' + escapeHtml(i18n.t('common.save')) + '</button>' +
           '<button data-act="cancel">' + escapeHtml(i18n.t('common.cancel')) + '</button>' +
         '</div>'
-      : '<div class="swatch" style="background:' + p.color + '"></div>' +
+      : '<div class="profile-avatar" style="' + profileAvatarStyle(p, profileIndex(p)) + '"></div>' +
         '<div>' +
           '<div class="pc-name">' + escapeHtml(p.name) +
             (isDefault ? '<span class="pc-tag default">' + escapeHtml(i18n.t('prof.default')) + '</span>' : '') +
@@ -1243,7 +1290,7 @@ async function renderProfiles() {
           (isDefault ? '' : '<button data-act="default" class="primary">' + escapeHtml(i18n.t('prof.set_default')) + '</button>') +
           '<button data-act="rename">' + escapeHtml(i18n.t('prof.edit')) + '</button>' +
           '<button data-act="clear">' + escapeHtml(i18n.t('prof.clear')) + '</button>' +
-          (p.id === 'main' ? '' : '<button data-act="delete" class="danger">' + escapeHtml(i18n.t('prof.delete')) + '</button>') +
+          (p.id === 'main' || p.id === 'lucky-orange' ? '' : '<button data-act="delete" class="danger">' + escapeHtml(i18n.t('prof.delete')) + '</button>') +
         '</div>';
     const q = (sel) => card.querySelector(sel);
     if (isEditing) {
@@ -1477,7 +1524,7 @@ function renderAccounts() {
   const list = $('acct-list');
   list.innerHTML = '';
   if (!items.length) {
-    list.innerHTML = '<div class="placeholder" style="padding: 16px; height: auto;"><div>' + escapeHtml(i18n.t('acct.empty')) + '</div></div>';
+    list.innerHTML = placeholderHtml(i18n.t('acct.empty'), 'assets/optional/empty_accounts.png', 'padding: 16px; height: auto;');
     return;
   }
   for (const account of items.slice(0, LIST_RENDER_LIMIT)) {
@@ -1487,7 +1534,7 @@ function renderAccounts() {
     const title = accountTitle(account);
     row.innerHTML =
       '<div class="check-cell"><input type="checkbox" data-account-id="' + escapeHtml(account.id) + '"></div>' +
-      '<div class="e-cover" style="background:' + (prof ? prof.color : '#888') + '">' + escapeHtml((account.username || title || '?')[0].toUpperCase()) + '</div>' +
+      '<div class="e-cover avatar-cover" style="' + profileAvatarStyle(prof, profileIndex(prof)) + '">' + escapeHtml((account.username || title || '?')[0].toUpperCase()) + '</div>' +
       '<div class="e-text">' +
         '<div class="e-title">' + escapeHtml(title) + ' <span style="color:var(--text-secondary);font-weight:400;font-size:11px;"> · ' + escapeHtml(account.username || '') + '</span></div>' +
         '<div class="account-meta">' + escapeHtml(prof ? prof.name : '-') + ' · ' + escapeHtml(account.host || hostFromAccountUrl(accountUrl(account))) +
@@ -1711,7 +1758,7 @@ function showAccountPicker(tab, host, credentials) {
     row.className = 'ap-account';
     const letter = ((c.username || '?')[0] || '?').toUpperCase();
     row.innerHTML =
-      '<div class="ap-avatar" style="background:' + (prof ? prof.color : '#888') + '">' + escapeHtml(letter) + '</div>' +
+      '<div class="ap-avatar" style="' + profileAvatarStyle(prof, profileIndex(prof)) + '">' + escapeHtml(letter) + '</div>' +
       '<div class="ap-main">' +
         '<div class="ap-user">' + escapeHtml(c.username || i18n.t('pw.no_username')) + '</div>' +
         '<div class="ap-profile">' + escapeHtml(prof ? prof.name : '-') + '</div>' +
@@ -1889,7 +1936,7 @@ function renderNotes() {
   const list = $('notes-list');
   list.innerHTML = '';
   if (!items.length) {
-    list.innerHTML = '<div class="placeholder" style="padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('notes.empty_list')) + '</div></div>';
+    list.innerHTML = placeholderHtml(i18n.t('notes.empty_list'), 'assets/optional/empty_notes.png', 'padding: 20px; height: auto;');
   } else {
     for (const n of items) {
       const item = document.createElement('div');
@@ -1908,7 +1955,7 @@ function renderNoteEditor() {
   const editor = $('notes-editor');
   const note = notes.find(n => n.id === activeNoteId);
   if (!note) {
-    editor.innerHTML = '<div class="notes-empty-editor">' + escapeHtml(i18n.t('notes.empty_editor')) + '</div>';
+    editor.innerHTML = placeholderHtml(i18n.t('notes.empty_editor'), 'assets/optional/empty_notes.png', 'height:100%;');
     return;
   }
   editor.innerHTML = '';
@@ -2152,7 +2199,7 @@ function renderLibrary() {
   const grid = $('lib-grid');
   grid.innerHTML = '';
   if (!items.length) {
-    grid.innerHTML = '<div class="placeholder" style="grid-column:1/-1;padding:20px;height:auto;"><div>' + escapeHtml(i18n.t('lib.empty')) + '</div></div>';
+    grid.innerHTML = placeholderHtml(i18n.t('lib.empty'), 'assets/optional/empty_library.png', 'grid-column:1/-1;padding:20px;height:auto;');
     return;
   }
   for (const it of items.slice(0, LIST_RENDER_LIMIT)) grid.appendChild(libCardEl(it));
