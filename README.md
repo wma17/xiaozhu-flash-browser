@@ -23,7 +23,6 @@
 - `scripts/build-speed-shim.sh`：构建 `PepperFlashPlayerSpeed.plugin`。
 - `scripts/build-dmg.sh`：从本机 `.app` 生成 `dist/` 下的 DMG 和 SHA256。
 - `docs/speed-research.md`：变速研究记录、失败现象和后续方向。
-- `docs/orange-theme-asset-brief.md`：小橙子定制主题的素材需求清单。
 
 ## 本机开发
 
