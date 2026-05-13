@@ -8,6 +8,7 @@
 - 多开优化：关闭后台节流、减少后台服务，并提供窗口网格排列和账号网格打开。
 - 游戏模式：压缩浏览器 UI，把更多屏幕空间留给游戏。
 - 账号中心：保存游戏、网址、账号、档案、备注和默认速度，支持批量打开。
+- 游戏工具：在游戏页集中提供修复当前页、截图、选择档案多开、便签显示、全局静音和标签静音。
 - 游戏医生：一键清理当前档案、重置速度/缩放、忽略缓存刷新，也可清理全部档案。
 - 账号辅助：检测登录表单、保存账号密码、同站点多账号选择填充。
 
@@ -22,6 +23,7 @@
 - `scripts/build-speed-shim.sh`：构建 `PepperFlashPlayerSpeed.plugin`。
 - `scripts/build-dmg.sh`：从本机 `.app` 生成 `dist/` 下的 DMG 和 SHA256。
 - `docs/speed-research.md`：变速研究记录、失败现象和后续方向。
+- `docs/orange-theme-asset-brief.md`：小橙子定制主题的素材需求清单。
 
 ## 本机开发
 
@@ -46,8 +48,8 @@ scripts/build-dmg.sh
 
 生成文件示例：
 
-- `dist/XiaozhuFlashBrowser-macOS-v1.4.0.dmg`
-- `dist/XiaozhuFlashBrowser-macOS-v1.4.0.dmg.sha256`
+- `dist/XiaozhuFlashBrowser-macOS-v1.4.1.dmg`
+- `dist/XiaozhuFlashBrowser-macOS-v1.4.1.dmg.sha256`
 
 `dist/` 不进入 Git 仓库，发布包请上传到 GitHub Release。
 
@@ -57,3 +59,4 @@ scripts/build-dmg.sh
 2. 在「账号中心」给不同账号绑定不同档案，测试单开、批量打开和网格打开。
 3. 三开或四开后在「窗口」页点「网格排列」，确认窗口能自动铺开。
 4. 登录或加载异常时先用「游戏医生」的「重置当前标签」；仍异常再用「一键修复」。
+5. 在游戏页点「工具」，测试截图保存、选择档案多开、便签显示/隐藏、全局静音和标签静音。

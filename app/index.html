@@ -297,6 +297,8 @@
     }
     #tab-strip .tab:hover { background: var(--soft-wheat); color: var(--dark-brown); }
     #tab-strip .tab.active { background: var(--panel-white-2); color: var(--dark-brown); border-color: var(--border); font-weight: 600; }
+    #tab-strip .tab.muted { border-color: rgba(200, 107, 42, .32); }
+    #tab-strip .tab.muted .t-title { color: var(--text-secondary); }
     #tab-strip .tab .t-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
     #tab-strip .tab .spinner { width: 10px; height: 10px; border: 2px solid var(--main-orange); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; display: none; }
     #tab-strip .tab.loading .spinner { display: inline-block; }
@@ -316,6 +318,22 @@
     #tab-strip .speed-ind.sealed { display: none; }
     #tab-strip .speed-ind:hover { background: #D7ECD8; border-color: rgba(76, 122, 90, .5); }
     #tab-strip .speed-ind.hot { background: #FFE8A8; border-color: rgba(200, 107, 42, .38); color: var(--deep-orange); }
+    #tab-strip .tool-ind {
+      min-width: 46px; height: 22px; display: flex; align-items: center; justify-content: center;
+      box-sizing: border-box; padding: 0 8px; border-radius: 8px;
+      background: var(--cream-bg-2); color: var(--warm-brown);
+      border: 1px solid var(--border); cursor: default; user-select: none;
+      font-size: 11px; line-height: 1; white-space: nowrap;
+    }
+    #tab-strip .tool-ind:hover { background: var(--soft-wheat); color: var(--dark-brown); border-color: var(--border-strong); }
+    #tab-strip .tool-ind.on { background: #FFE8A8; color: var(--deep-orange); border-color: rgba(200, 107, 42, .38); }
+    #tab-strip .tool-ind.disabled { opacity: .45; pointer-events: none; }
+    .game-tools-menu .menu-item {
+      min-width: 190px; justify-content: space-between;
+    }
+    .game-tools-menu .state {
+      margin-left: auto; color: var(--deep-orange); font-weight: 700;
+    }
     #tab-strip #new-tab-btn { padding: 4px 10px; border-radius: 8px; background: var(--cream-bg-2); color: var(--warm-brown); font-size: 16px; border: 1px solid var(--border); }
     #tab-strip #new-tab-btn:hover { background: var(--main-orange); color: #fff; border-color: transparent; }
     #tab-strip #game-mode-btn { padding: 4px 9px; border-radius: 8px; background: var(--cream-bg-2); color: var(--warm-brown); font-size: 13px; border: 1px solid var(--border); cursor: default; }
@@ -338,6 +356,7 @@
     body.game-mode #tab-strip .tab.active { max-width: 260px; min-width: 140px; padding: 2px 8px; }
     body.game-mode #tab-strip .zc .nav-btn,
     body.game-mode #tab-strip .zc .zoom-ind { display: none; }
+    body.game-mode #tab-strip .tool-ind { height: 20px; min-width: 42px; padding: 0 8px; font-size: 10px; }
     body.game-mode #webviews-container { top: 26px; }
 
     /* Shortcuts */
@@ -590,6 +609,61 @@
     }
     #account-picker .sp-actions button:hover { background: var(--soft-wheat); }
 
+    /* Profile picker for multi-open */
+    #profile-open-modal {
+      position: fixed; top: 56px; right: 20px; z-index: 56;
+      background: var(--panel-white-2); border: 1px solid var(--border-strong);
+      border-radius: 14px; padding: 14px 16px;
+      box-shadow: var(--shadow-lg);
+      width: 390px; display: none;
+    }
+    #profile-open-modal.visible { display: block; }
+    #profile-open-modal .sp-title { font-weight: 700; color: var(--dark-brown); margin-bottom: 8px; }
+    #profile-open-modal .sp-site { font-size: 11px; color: var(--text-secondary); margin-bottom: 10px; word-break: break-all; }
+    #profile-open-modal .profile-open-toolbar {
+      display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+    }
+    #profile-open-modal .profile-open-toolbar .count {
+      margin-left: auto; font-size: 11px; color: var(--text-secondary);
+    }
+    #profile-open-modal .profile-open-list {
+      max-height: 260px; overflow: auto;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .profile-open-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; border-radius: 10px;
+      background: var(--panel-white); border: 1px solid var(--border);
+      cursor: default;
+    }
+    .profile-open-row:hover { background: var(--soft-wheat); border-color: var(--border-strong); }
+    .profile-open-row input {
+      width: 16px; height: 16px; margin: 0;
+      accent-color: var(--main-orange);
+    }
+    .profile-open-swatch {
+      width: 20px; height: 20px; border-radius: 6px;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.06) inset;
+      flex-shrink: 0;
+    }
+    .profile-open-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+    .profile-open-name {
+      font-weight: 600; color: var(--dark-brown);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .profile-open-meta { font-size: 11px; color: var(--text-secondary); flex-shrink: 0; }
+    #profile-open-modal .sp-actions {
+      display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 10px;
+    }
+    #profile-open-modal button {
+      font: inherit; padding: 6px 12px; border-radius: 8px;
+      background: var(--panel-white); color: var(--warm-brown);
+      border: 1px solid var(--border); cursor: default;
+    }
+    #profile-open-modal button:hover { background: var(--soft-wheat); }
+    #profile-open-modal button.primary { background: var(--main-orange); color: #fff; border-color: transparent; }
+    #profile-open-modal button.primary:hover { background: var(--deep-orange); }
+
     #account-indicator {
       position: relative;
     }
@@ -758,6 +832,7 @@
       cursor: default; font-size: 12px;
     }
     .menu .menu-item:hover { background: var(--soft-wheat); }
+    .menu .menu-item.disabled { opacity: .45; pointer-events: none; }
     .menu .menu-item .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .menu .menu-item.check::before { content: "✓"; margin-right: 4px; color: var(--main-orange); width: 10px; }
     .menu .menu-item:not(.check)::before { content: " "; margin-right: 4px; width: 10px; }
@@ -1131,6 +1206,7 @@
           <div class="spacer"></div>
           <div class="zc">
             <div id="game-mode-btn" data-i18n-title="game_mode.toggle" title="Game mode">⛶</div>
+            <div class="tool-ind" id="game-tools-btn" data-i18n-title="tools.game" title="Game tools">工具</div>
             <div class="speed-ind sealed" id="speed-indicator" title="Flash speed">1x ▾</div>
             <div class="nav-btn" id="zoom-out-btn" title="Zoom out (⌘-)">−</div>
             <div class="zoom-ind" id="zoom-indicator">100%</div>
@@ -1196,6 +1272,23 @@
       <button id="acct-delete" data-i18n="pw.delete"></button>
       <button id="acct-cancel" data-i18n="common.cancel"></button>
       <button id="acct-save" data-i18n="common.save"></button>
+    </div>
+  </div>
+
+  <!-- Profile picker for multi-open -->
+  <div id="profile-open-modal">
+    <div class="sp-title" data-i18n="profile_open.title"></div>
+    <div class="sp-site" id="profile-open-url"></div>
+    <div class="profile-open-toolbar">
+      <button id="profile-open-select-all" data-i18n="profile_open.select_all"></button>
+      <button id="profile-open-select-none" data-i18n="profile_open.select_none"></button>
+      <div class="count" id="profile-open-count"></div>
+    </div>
+    <div class="profile-open-list" id="profile-open-list"></div>
+    <div class="sp-actions">
+      <button id="profile-open-cancel" data-i18n="common.cancel"></button>
+      <button id="profile-open-run" data-i18n="profile_open.open"></button>
+      <button id="profile-open-grid" class="primary" data-i18n="profile_open.open_grid"></button>
     </div>
   </div>
 

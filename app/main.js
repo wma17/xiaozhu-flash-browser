@@ -184,7 +184,8 @@ function seedDefaults() {
       sidebarCollapsed: false,
       speedProfile: 'native-ddt',
       speedProfileVersion: 5,
-      speedAutoMute: true,
+      globalMuted: false,
+      showQuickNote: true,
     });
   }
   if (!fs.existsSync(storePath('profiles'))) {
@@ -251,6 +252,19 @@ ipcMain.handle('window:tile-grid', () => {
     try { win.setBounds(gridBounds(index, total), true); } catch (e) {}
   });
   return { tiled: total };
+});
+ipcMain.handle('audio:set-global-muted', (_e, muted) => {
+  const value = !!muted;
+  broadcast('audio:global-muted', value);
+  return value;
+});
+ipcMain.handle('screenshot:save', (_e, pngBytes, title) => {
+  const rawName = String(title || 'game').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim() || 'game';
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const fileName = '小竹截图-' + rawName.slice(0, 40) + '-' + stamp + '.png';
+  const filePath = path.join(app.getPath('desktop'), fileName);
+  fs.writeFileSync(filePath, Buffer.from(pngBytes));
+  return { path: filePath };
 });
 ipcMain.handle('speed:get', () => readSpeedFactor());
 ipcMain.handle('speed:state', () => readSpeedState());

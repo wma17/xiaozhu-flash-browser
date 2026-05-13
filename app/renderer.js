@@ -24,12 +24,14 @@ let settings = {
   sidebarCollapsed: false,
   speedProfile: 'native-ddt',
   speedProfileVersion: 5,
-  speedAutoMute: true,
+  showQuickNote: true,
+  globalMuted: false,
 };
 let speedFactor = 1;
 let speedHookEnabled = false;
 let currentRoute = 'home';
 let pendingSavePrompt = null;
+let profileOpenUrl = null;
 let windowProfileId = null; // each window is bound to one profile (Chrome-style)
 let menuCloseHandler = null;
 const preloadPath = 'file://' + document.location.pathname.split('/').slice(0, -1).join('/') + '/webview-preload.js';
@@ -93,8 +95,16 @@ async function loadStores() {
     settings.speedProfileVersion = 5;
     settingsChanged = true;
   }
-  if (settings.speedAutoMute == null) {
-    settings.speedAutoMute = true;
+  if (settings.showQuickNote == null) {
+    settings.showQuickNote = true;
+    settingsChanged = true;
+  }
+  if (settings.globalMuted == null) {
+    settings.globalMuted = false;
+    settingsChanged = true;
+  }
+  if (settings.speedAutoMute != null) {
+    delete settings.speedAutoMute;
     settingsChanged = true;
   }
   if (settingsChanged) await ipcRenderer.invoke('store:set', 'settings', settings);
@@ -203,6 +213,8 @@ function applyLanguage() {
   refreshProfileChip();
   updateCounts();
   reRenderCurrent();
+  updateAudioButtons();
+  updateQuickNoteToggle();
 }
 function applyIdentity() {
   const id = settings.identity || {};
@@ -297,6 +309,7 @@ function createTab(url) {
     id, title: 'Loading…', url: url || homeUrl,
     loading: false, zoom: 1, fit: false,
     ready: false,
+    muted: false,
     profileId: profile ? profile.id : null,
     currentHost: null,
   };
@@ -333,7 +346,7 @@ function createTab(url) {
   wv.setAttribute('src', tab.url);
   $webviews.appendChild(wv);
   tab.webview = wv;
-  applySpeedAudioMute();
+  applyAudioMute(tab);
   wv.addEventListener('focus', closeAnyMenus);
 
   const applyZoom = () => {
@@ -436,6 +449,7 @@ function activateTab(id) {
   updateBookmarkStar();
   updateZoomIndicator();
   updateAccountIndicator();
+  updateAudioButtons();
 }
 
 function closeTab(id) {
@@ -447,6 +461,7 @@ function closeTab(id) {
   tabs.splice(idx, 1);
   if (tabs.length === 0) {
     activeId = null;
+    updateAudioButtons();
     setRoute('home');
     return;
   }
@@ -504,13 +519,198 @@ function speedProfileCode() {
   return profile.code;
 }
 
-function applySpeedAudioMute() {
-  const shouldMute = !!settings.speedAutoMute && speedHookEnabled && Math.abs((speedFactor || 1) - 1) > 0.01;
-  for (const t of tabs) {
+function effectiveMuted(tab) {
+  return !!settings.globalMuted || !!(tab && tab.muted);
+}
+function applyAudioMute(tab) {
+  const targetTabs = tab ? [tab] : tabs;
+  for (const t of targetTabs) {
     try {
-      if (t.webview && typeof t.webview.setAudioMuted === 'function') t.webview.setAudioMuted(shouldMute);
+      if (t.webview && typeof t.webview.setAudioMuted === 'function') t.webview.setAudioMuted(effectiveMuted(t));
     } catch (e) {}
   }
+  updateAudioButtons();
+}
+function updateAudioButtons() {
+  for (const t of tabs) {
+    if (t.stripEl) t.stripEl.classList.toggle('muted', effectiveMuted(t));
+  }
+  updateGameToolsButton();
+}
+async function setGlobalMuted(muted, broadcast = true) {
+  settings.globalMuted = !!muted;
+  await saveSettings();
+  applyAudioMute();
+  if (broadcast) ipcRenderer.invoke('audio:set-global-muted', settings.globalMuted).catch(() => {});
+}
+function setTabMuted(tab, muted) {
+  if (!tab) return;
+  tab.muted = !!muted;
+  applyAudioMute(tab);
+}
+function updateGameToolsButton() {
+  const btn = $('game-tools-btn');
+  if (!btn) return;
+  const custom = settings.showQuickNote === false || !!settings.globalMuted || !!(activeTab() && activeTab().muted);
+  btn.classList.toggle('on', custom);
+  btn.textContent = i18n.t('tools.toolbar');
+  btn.title = i18n.t('tools.game');
+}
+function menuState(on) {
+  return on ? i18n.t('tools.on') : i18n.t('tools.off');
+}
+function addToolToggle(menu, labelKey, on, onClick, enabled = true) {
+  const item = document.createElement('div');
+  item.className = 'menu-item' + (on ? ' check' : '') + (enabled ? '' : ' disabled');
+  item.innerHTML = '<span>' + escapeHtml(i18n.t(labelKey)) + '</span><span class="state">' + escapeHtml(menuState(on)) + '</span>';
+  if (enabled) {
+    item.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      await onClick();
+      closeAnyMenus();
+    });
+  }
+  menu.appendChild(item);
+}
+function addToolAction(menu, labelKey, onClick, enabled = true) {
+  const item = document.createElement('div');
+  item.className = 'menu-item' + (enabled ? '' : ' disabled');
+  item.innerHTML = '<span>' + escapeHtml(i18n.t(labelKey)) + '</span>';
+  if (enabled) {
+    item.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      closeAnyMenus();
+      await onClick();
+    });
+  }
+  menu.appendChild(item);
+}
+function addToolDivider(menu) {
+  const div = document.createElement('div');
+  div.style.cssText = 'border-top: 1px solid var(--border); margin: 4px 6px;';
+  menu.appendChild(div);
+}
+function captureWebview(tab) {
+  return new Promise((resolve, reject) => {
+    if (!tab || !tab.webview || typeof tab.webview.capturePage !== 'function') {
+      reject(new Error('No active webview'));
+      return;
+    }
+    try {
+      const maybe = tab.webview.capturePage();
+      if (maybe && typeof maybe.then === 'function') {
+        maybe.then(resolve, reject);
+        return;
+      }
+    } catch (e) {
+      try {
+        tab.webview.capturePage((image) => image ? resolve(image) : reject(new Error('Empty capture')));
+        return;
+      } catch (err) {
+        reject(err);
+        return;
+      }
+    }
+    try {
+      tab.webview.capturePage((image) => image ? resolve(image) : reject(new Error('Empty capture')));
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+async function screenshotCurrentGame() {
+  const tab = activeTab();
+  if (!tab) return;
+  const image = await captureWebview(tab);
+  const saved = await ipcRenderer.invoke('screenshot:save', image.toPNG(), tab.title || hostOf(tab.url));
+  if (saved && saved.path) alert(i18n.t('tools.screenshot_saved').replace('{path}', saved.path));
+}
+function openUrlInProfiles(url, grid, profileIds) {
+  const ids = (profileIds && profileIds.length ? profileIds : profiles.map(p => p.id));
+  if (grid) {
+    ipcRenderer.invoke('window:open-accounts-grid', ids.map(profileId => ({ url, profileId })));
+  } else {
+    ipcRenderer.invoke('window:open-many', url, ids);
+  }
+}
+function selectedProfileOpenIds() {
+  return Array.from(document.querySelectorAll('#profile-open-list input[data-profile-id]:checked'))
+    .map(input => input.dataset.profileId)
+    .filter(id => profiles.some(p => p.id === id));
+}
+function updateProfileOpenCount() {
+  const countEl = $('profile-open-count');
+  if (!countEl) return;
+  countEl.textContent = i18n.t('profile_open.count')
+    .replace('{selected}', selectedProfileOpenIds().length)
+    .replace('{total}', profiles.length);
+}
+function setProfileOpenChecks(checked) {
+  document.querySelectorAll('#profile-open-list input[data-profile-id]').forEach(input => {
+    input.checked = !!checked;
+  });
+  updateProfileOpenCount();
+}
+function showProfileOpenModal() {
+  ensureProfiles();
+  const tab = activeTab();
+  profileOpenUrl = tab ? tab.url : homeUrl;
+  $('profile-open-url').textContent = profileOpenUrl;
+  const savedIds = Array.isArray(settings.multiOpenProfileIds)
+    ? settings.multiOpenProfileIds.filter(id => profiles.some(p => p.id === id))
+    : [];
+  const selectedIds = savedIds.length ? savedIds : profiles.map(p => p.id);
+  const list = $('profile-open-list');
+  list.innerHTML = '';
+  for (const p of profiles) {
+    const row = document.createElement('label');
+    row.className = 'profile-open-row';
+    const current = p.id === windowProfileId ? i18n.t('profile_open.current') : '';
+    row.innerHTML =
+      '<input type="checkbox" data-profile-id="' + escapeHtml(p.id) + '"' + (selectedIds.includes(p.id) ? ' checked' : '') + ' />' +
+      '<span class="profile-open-swatch" style="background:' + escapeHtml(p.color || '#888') + '"></span>' +
+      '<span class="profile-open-main">' +
+        '<span class="profile-open-name">' + escapeHtml(p.name || p.id) + '</span>' +
+        '<span class="profile-open-meta">' + escapeHtml(current) + '</span>' +
+      '</span>';
+    row.querySelector('input').addEventListener('change', updateProfileOpenCount);
+    list.appendChild(row);
+  }
+  updateProfileOpenCount();
+  $('profile-open-modal').classList.add('visible');
+}
+function hideProfileOpenModal() {
+  $('profile-open-modal').classList.remove('visible');
+}
+async function runProfileOpen(grid) {
+  const ids = selectedProfileOpenIds();
+  if (!ids.length) {
+    alert(i18n.t('profile_open.empty'));
+    return;
+  }
+  settings.multiOpenProfileIds = ids;
+  await saveSettings();
+  const url = profileOpenUrl || (activeTab() ? activeTab().url : homeUrl);
+  hideProfileOpenModal();
+  openUrlInProfiles(url, grid, ids);
+}
+function showGameToolsMenu(anchor) {
+  closeAnyMenus();
+  const rect = anchor.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'menu game-tools-menu';
+  menu.style.top = (rect.bottom + 4) + 'px';
+  menu.style.left = Math.max(8, rect.right - 230) + 'px';
+  const tab = activeTab();
+  addToolAction(menu, 'tools.repair_page', resetDoctorTab, !!tab);
+  addToolAction(menu, 'tools.screenshot', screenshotCurrentGame, !!tab);
+  addToolAction(menu, 'tools.multi_open', showProfileOpenModal, !!tab);
+  addToolDivider(menu);
+  addToolToggle(menu, 'tools.quick_note', settings.showQuickNote !== false, () => setQuickNoteVisible(settings.showQuickNote === false));
+  addToolToggle(menu, 'tools.global_mute', !!settings.globalMuted, () => setGlobalMuted(!settings.globalMuted));
+  addToolToggle(menu, 'tools.tab_mute', !!(tab && tab.muted), () => setTabMuted(tab, !tab.muted), !!tab);
+  document.body.appendChild(menu);
+  armMenuClose();
 }
 // Clicking the zoom indicator opens a dropdown with preset values + custom + fit.
 $('zoom-indicator').addEventListener('click', (ev) => {
@@ -656,10 +856,7 @@ function showMoreMenu(anchor) {
   }
   addDivider();
   addItem(i18n.t('more.add_current_to_library'), { onClick: () => { const t = activeTab(); if (t) addToLibrary(t.url, t.title); } });
-  addItem(i18n.t('more.open_all_profiles'), { onClick: () => {
-    const t = activeTab();
-    ipcRenderer.invoke('window:open-many', t ? t.url : homeUrl, profiles.map(p => p.id));
-  } });
+  addItem(i18n.t('more.open_all_profiles'), { onClick: showProfileOpenModal });
   addItem(i18n.t('more.manage_profiles'), { onClick: () => setRoute('profiles') });
   addItem(i18n.t('more.settings'),        { onClick: () => setRoute('settings') });
   addItem(i18n.t('more.shortcuts'),       { onClick: () => setRoute('shortcuts') });
@@ -729,7 +926,6 @@ async function setSpeedFactor(factor) {
   const next = await ipcRenderer.invoke('speed:set', factor, speedProfileCode());
   speedFactor = next || 1;
   updateSpeedIndicator();
-  applySpeedAudioMute();
 }
 function showSpeedMenu(anchor) {
   closeAnyMenus();
@@ -777,17 +973,6 @@ function showSpeedMenu(anchor) {
     });
     menu.appendChild(item);
   }
-  const muteItem = document.createElement('div');
-  muteItem.className = 'menu-item' + (settings.speedAutoMute ? ' check' : '');
-  muteItem.textContent = i18n.t('speed.auto_mute');
-  muteItem.addEventListener('click', async (ev) => {
-    ev.stopPropagation();
-    settings.speedAutoMute = !settings.speedAutoMute;
-    await saveSettings();
-    applySpeedAudioMute();
-    closeAnyMenus();
-  });
-  menu.appendChild(muteItem);
   const modeDiv = document.createElement('div');
   modeDiv.style.cssText = 'border-top: 1px solid var(--border); margin: 4px 6px;';
   menu.appendChild(modeDiv);
@@ -838,7 +1023,10 @@ $('speed-indicator').addEventListener('click', (ev) => { ev.stopPropagation(); s
 ipcRenderer.on('speed:changed', (_e, factor) => {
   speedFactor = factor || 1;
   updateSpeedIndicator();
-  applySpeedAudioMute();
+});
+ipcRenderer.on('audio:global-muted', (_e, muted) => {
+  settings.globalMuted = !!muted;
+  applyAudioMute();
 });
 
 // ---------- history ----------
@@ -1193,7 +1381,6 @@ async function applyAccountSpeed(account) {
   const next = await ipcRenderer.invoke('speed:set', factor, profile);
   speedFactor = next || factor;
   updateSpeedIndicator();
-  applySpeedAudioMute();
 }
 async function openAccount(account) {
   if (!account) return;
@@ -1481,9 +1668,7 @@ $('setting-default-profile').addEventListener('change', async (e) => {
 attachSwitch($('setting-restore-session'), async (v) => { settings.restoreSession = v; await saveSettings(); });
 attachSwitch($('setting-sidebar-collapsed'), async (v) => { settings.sidebarCollapsed = v; await saveSettings(); });
 attachSwitch($('setting-show-quick-note'), async (v) => {
-  settings.showQuickNote = v;
-  document.body.classList.toggle('hide-quick-note', !v);
-  await saveSettings();
+  await setQuickNoteVisible(v);
 });
 $('setting-clear-history').addEventListener('click', async () => {
   history = []; await saveHistory();
@@ -1780,10 +1965,31 @@ $('notes-new-btn').addEventListener('click', async () => {
 $('notes-search').addEventListener('input', renderNotes);
 
 // ---------- Quick Note FAB ----------
+function updateQuickNoteToggle() {
+  updateGameToolsButton();
+}
+async function setQuickNoteVisible(visible, persist = true) {
+  settings.showQuickNote = !!visible;
+  document.body.classList.toggle('hide-quick-note', !settings.showQuickNote);
+  if (!settings.showQuickNote) $('quick-note-popover').classList.remove('visible');
+  updateQuickNoteToggle();
+  if (currentRoute === 'settings') setSwitch($('setting-show-quick-note'), settings.showQuickNote);
+  if (persist) await saveSettings();
+}
 function openQuickNote() {
+  if (settings.showQuickNote === false) setQuickNoteVisible(true);
   $('quick-note-popover').classList.add('visible');
   setTimeout(() => $('qn-title').focus(), 50);
 }
+$('game-tools-btn').addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  showGameToolsMenu(ev.currentTarget);
+});
+$('profile-open-select-all').addEventListener('click', () => setProfileOpenChecks(true));
+$('profile-open-select-none').addEventListener('click', () => setProfileOpenChecks(false));
+$('profile-open-cancel').addEventListener('click', hideProfileOpenModal);
+$('profile-open-run').addEventListener('click', () => runProfileOpen(false));
+$('profile-open-grid').addEventListener('click', () => runProfileOpen(true));
 $('quick-note-fab').addEventListener('click', openQuickNote);
 $('qn-close').addEventListener('click', () => $('quick-note-popover').classList.remove('visible'));
 $('qn-save').addEventListener('click', async () => {
@@ -2062,8 +2268,9 @@ ipcRenderer.on('action', (_e, action, arg) => {
   applyLanguage();
   refreshProfileChip();
   updateSpeedIndicator();
+  updateAudioButtons();
   setSidebar(!!settings.sidebarCollapsed);
-  document.body.classList.toggle('hide-quick-note', settings.showQuickNote === false);
+  setQuickNoteVisible(settings.showQuickNote !== false, false);
   const init = await ipcRenderer.invoke('app:init');
   windowProfileId = (init && init.profileId) || settings.defaultProfileId || (profiles[0] && profiles[0].id);
   refreshProfileChip();
