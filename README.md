@@ -11,6 +11,7 @@
 - 游戏工具：在游戏页集中提供修复当前页、截图、选择档案多开、便签显示、全局静音和标签静音。
 - 游戏医生：一键清理当前档案、重置速度/缩放、忽略缓存刷新，也可清理全部档案。
 - 账号辅助：检测登录表单、保存账号密码、同站点多账号选择填充。
+- 主题系统：内置小竹原生、晨雾竹影、暖橙、Flash 档案馆、狼麦旅人、焙茶庭院、雾蓝、月下模式、怀旧游戏厅、macOS 石墨和自定义主题。
 
 > 注意：Adobe Pepper Flash 插件和 Electron 运行时不放进仓库。仓库保存小竹浏览器的应用源码与构建/同步脚本。
 
@@ -22,6 +23,7 @@
 - `scripts/sync-to-app.sh`：把 `app/` 同步到本机应用包并重新签名。
 - `scripts/build-speed-shim.sh`：构建 `PepperFlashPlayerSpeed.plugin`。
 - `scripts/build-dmg.sh`：从本机 `.app` 生成 `dist/` 下的 DMG 和 SHA256。
+- `docs/theme-system.md`：主题 ID、主题 token 和后续主题资产接入说明。
 - `docs/speed-research.md`：变速研究记录、失败现象和后续方向。
 
 ## 本机开发
@@ -47,8 +49,8 @@ scripts/build-dmg.sh
 
 生成文件示例：
 
-- `dist/XiaozhuFlashBrowser-macOS-v1.4.1.dmg`
-- `dist/XiaozhuFlashBrowser-macOS-v1.4.1.dmg.sha256`
+- `dist/XiaozhuFlashBrowser-macOS-v1.5.0.dmg`
+- `dist/XiaozhuFlashBrowser-macOS-v1.5.0.dmg.sha256`
 
 `dist/` 不进入 Git 仓库，发布包请上传到 GitHub Release。
 

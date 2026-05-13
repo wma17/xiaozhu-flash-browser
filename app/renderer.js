@@ -24,9 +24,12 @@ let settings = {
   sidebarCollapsed: false,
   speedProfile: 'native-ddt',
   speedProfileVersion: 5,
+  theme: 'xiaozhu-native',
   showQuickNote: true,
   globalMuted: false,
 };
+let appearanceExpanded = false;
+let customThemeSaveTimer = null;
 let speedFactor = 1;
 let speedHookEnabled = false;
 let currentRoute = 'home';
@@ -40,7 +43,122 @@ const HISTORY_REPEAT_WRITE_MS = 30000;
 const LIST_RENDER_LIMIT = 400;
 let historySaveTimer = null;
 const PROFILE_COLORS = ['#F4A23C', '#C86B2A', '#8B4E2A', '#5B4636', '#E09F3E', '#9E6240', '#4C7A5A', '#486F9E'];
-
+const THEME_ASSET_BASE = 'assets/themes/';
+const DEFAULT_CUSTOM_THEME = {
+  colors: {
+    background: '#F7F0E3',
+    backgroundAlt: '#E9D9BD',
+    panel: '#FFF8EA',
+    panelAlt: '#FFFDF6',
+    soft: '#EAD9A5',
+    accent: '#B9822E',
+    accentDeep: '#7E4F25',
+    muted: '#795D3D',
+    text: '#2E2418',
+    subtext: '#766751',
+  },
+  badgeImage: null,
+  mascotImage: null,
+};
+const CUSTOM_COLOR_FIELDS = [
+  ['background', 'theme.custom_background'],
+  ['backgroundAlt', 'theme.custom_background_alt'],
+  ['panel', 'theme.custom_panel'],
+  ['soft', 'theme.custom_soft'],
+  ['accent', 'theme.custom_accent'],
+  ['accentDeep', 'theme.custom_accent_deep'],
+  ['muted', 'theme.custom_muted'],
+  ['text', 'theme.custom_text'],
+  ['subtext', 'theme.custom_subtext'],
+];
+const CUSTOM_THEME_STYLE_PROPS = [
+  '--cream-bg', '--cream-bg-2', '--panel-white', '--panel-white-2', '--soft-wheat',
+  '--main-orange', '--deep-orange', '--warm-brown', '--dark-brown', '--text-primary',
+  '--text-secondary', '--border', '--border-strong', '--hover-bg', '--warning-bg',
+  '--warning-border', '--ambient-a', '--ambient-b', '--brand-badge-image',
+  '--footer-art-image', '--home-art-image', '--footer-art-opacity', '--footer-art-filter',
+  '--footer-art-blend-mode', '--home-art-opacity', '--home-art-filter', '--home-art-blend-mode',
+  '--doctor-repair-image', '--doctor-ok-image', '--doctor-windows-image',
+];
+const THEMES = [
+  {
+    id: 'xiaozhu-native',
+    nameKey: 'theme.xiaozhu_native',
+    descKey: 'theme.xiaozhu_native_desc',
+    swatches: ['#F4F1E8', '#6F9564', '#D0A24B'],
+  },
+  {
+    id: 'bamboo-morning',
+    nameKey: 'theme.bamboo_morning',
+    descKey: 'theme.bamboo_morning_desc',
+    swatches: ['#F4F3E8', '#6F9564', '#C79E4A'],
+  },
+  {
+    id: 'orange-special',
+    nameKey: 'theme.orange_special',
+    descKey: 'theme.orange_special_desc',
+    swatches: ['#F7EFE3', '#C8843C', '#7B5C3D'],
+  },
+  {
+    id: 'flash-archive',
+    nameKey: 'theme.flash_archive',
+    descKey: 'theme.flash_archive_desc',
+    swatches: ['#F2EBDD', '#8B6A3E', '#B85C38'],
+  },
+  {
+    id: 'wolf-wheat',
+    nameKey: 'theme.wolf_wheat',
+    descKey: 'theme.wolf_wheat_desc',
+    swatches: ['#F7F0E3', '#B9822E', '#5F7C38'],
+  },
+  {
+    id: 'tea-garden',
+    nameKey: 'theme.tea_garden',
+    descKey: 'theme.tea_garden_desc',
+    swatches: ['#F5EEDF', '#9B7042', '#6B7B4C'],
+  },
+  {
+    id: 'mist-blue',
+    nameKey: 'theme.mist_blue',
+    descKey: 'theme.mist_blue_desc',
+    swatches: ['#EEF2F3', '#557F98', '#9B8050'],
+  },
+  {
+    id: 'moonlight',
+    nameKey: 'theme.moonlight',
+    descKey: 'theme.moonlight_desc',
+    swatches: ['#151917', '#5E9E6B', '#D9A441'],
+  },
+  {
+    id: 'arcade-night',
+    nameKey: 'theme.arcade_night',
+    descKey: 'theme.arcade_night_desc',
+    swatches: ['#10131B', '#4D9DBA', '#A36586'],
+  },
+  {
+    id: 'graphite',
+    nameKey: 'theme.graphite',
+    descKey: 'theme.graphite_desc',
+    swatches: ['#ECEFF2', '#66717D', '#4D82B8'],
+  },
+  {
+    id: 'custom',
+    nameKey: 'theme.custom',
+    descKey: 'theme.custom_desc',
+    custom: true,
+  },
+];
+const THEME_IDS = THEMES.map(t => t.id);
+const EMPTY_ASSETS = {
+  library: 'empty-wolf-wheat-library.png',
+  favorites: 'mascot-wolf-wheat-sitting.png',
+  recent: 'mascot-wolf-wheat-standing.png',
+  windows: 'mascot-wolf-wheat-tiny-footer.png',
+  notes: 'mascot-wolf-wheat-reading.png',
+  tasks: 'doctor-wolf-wheat-ok.png',
+  doctorRepair: 'mascot-wolf-wheat-reading.png',
+  doctorOk: 'doctor-wolf-wheat-ok.png',
+};
 const $ = (id) => document.getElementById(id);
 const $topUrl = $('url');
 const $back = $('back');
@@ -103,6 +221,15 @@ async function loadStores() {
     settings.globalMuted = false;
     settingsChanged = true;
   }
+  const normalizedCustomTheme = normalizeCustomTheme(settings.customTheme);
+  if (JSON.stringify(normalizedCustomTheme) !== JSON.stringify(settings.customTheme || null)) {
+    settings.customTheme = normalizedCustomTheme;
+    settingsChanged = true;
+  }
+  if (!THEME_IDS.includes(settings.theme)) {
+    settings.theme = 'xiaozhu-native';
+    settingsChanged = true;
+  }
   if (settings.speedAutoMute != null) {
     delete settings.speedAutoMute;
     settingsChanged = true;
@@ -158,6 +285,50 @@ function domainLetter(url) {
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+function isHexColor(value) {
+  return /^#[0-9a-f]{6}$/i.test(String(value || ''));
+}
+function normalizeCustomTheme(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const colors = Object.assign({}, DEFAULT_CUSTOM_THEME.colors, source.colors || {});
+  for (const key of Object.keys(DEFAULT_CUSTOM_THEME.colors)) {
+    if (!isHexColor(colors[key])) colors[key] = DEFAULT_CUSTOM_THEME.colors[key];
+  }
+  return {
+    colors,
+    badgeImage: typeof source.badgeImage === 'string' ? source.badgeImage : null,
+    mascotImage: typeof source.mascotImage === 'string' ? source.mascotImage : null,
+  };
+}
+function customTheme() {
+  settings.customTheme = normalizeCustomTheme(settings.customTheme);
+  return settings.customTheme;
+}
+function hexToRgb(hex) {
+  const clean = String(hex || '#000000').replace('#', '');
+  return {
+    r: parseInt(clean.slice(0, 2), 16),
+    g: parseInt(clean.slice(2, 4), 16),
+    b: parseInt(clean.slice(4, 6), 16),
+  };
+}
+function rgba(hex, alpha) {
+  const c = hexToRgb(hex);
+  return 'rgba(' + c.r + ', ' + c.g + ', ' + c.b + ', ' + alpha + ')';
+}
+function cssImage(value, fallback) {
+  return 'url("' + (value || fallback) + '")';
+}
+function assetUrl(fileName) {
+  return THEME_ASSET_BASE + fileName;
+}
+function placeholderHtml(message, assetName, style) {
+  const image = assetName ? '<div class="ph-asset" style="background-image:url(' + assetUrl(assetName) + ')"></div>' : '';
+  return '<div class="placeholder" style="' + (style || '') + '">' +
+    image +
+    '<div class="ph-text">' + escapeHtml(message) + '</div>' +
+    '</div>';
+}
 function formatTime(ts) {
   if (!ts) return '';
   const d = new Date(ts);
@@ -205,9 +376,68 @@ function nextProfileName() {
 }
 
 // ---------- i18n ----------
+function currentTheme() {
+  return THEMES.find(t => t.id === settings.theme) || THEMES[0];
+}
+function clearCustomThemeStyles() {
+  for (const prop of CUSTOM_THEME_STYLE_PROPS) document.documentElement.style.removeProperty(prop);
+}
+function applyCustomThemeStyles() {
+  const theme = customTheme();
+  const c = theme.colors;
+  const fallbackBadge = assetUrl('badge-wolf-wheat-browser.png');
+  const fallbackMascot = assetUrl('mascot-wolf-wheat-tiny-footer.png');
+  const root = document.documentElement.style;
+  root.setProperty('--cream-bg', c.background);
+  root.setProperty('--cream-bg-2', c.backgroundAlt);
+  root.setProperty('--panel-white', c.panel);
+  root.setProperty('--panel-white-2', c.panelAlt);
+  root.setProperty('--soft-wheat', c.soft);
+  root.setProperty('--main-orange', c.accent);
+  root.setProperty('--deep-orange', c.accentDeep);
+  root.setProperty('--warm-brown', c.muted);
+  root.setProperty('--dark-brown', c.text);
+  root.setProperty('--text-primary', c.text);
+  root.setProperty('--text-secondary', c.subtext);
+  root.setProperty('--border', rgba(c.muted, 0.20));
+  root.setProperty('--border-strong', rgba(c.muted, 0.36));
+  root.setProperty('--hover-bg', rgba(c.soft, 0.58));
+  root.setProperty('--warning-bg', rgba(c.accent, 0.14));
+  root.setProperty('--warning-border', rgba(c.accent, 0.42));
+  root.setProperty('--ambient-a', rgba(c.soft, 0.52));
+  root.setProperty('--ambient-b', rgba(c.accent, 0.12));
+  root.setProperty('--brand-badge-image', cssImage(theme.badgeImage, fallbackBadge));
+  root.setProperty('--footer-art-image', cssImage(theme.mascotImage, fallbackMascot));
+  root.setProperty('--home-art-image', cssImage(theme.mascotImage, assetUrl('mascot-wolf-wheat-reading.png')));
+  root.setProperty('--footer-art-opacity', '0.90');
+  root.setProperty('--footer-art-filter', 'saturate(0.92)');
+  root.setProperty('--footer-art-blend-mode', 'multiply');
+  root.setProperty('--home-art-opacity', '0.10');
+  root.setProperty('--home-art-filter', 'saturate(0.82)');
+  root.setProperty('--home-art-blend-mode', 'multiply');
+  root.setProperty('--doctor-repair-image', cssImage(theme.mascotImage, assetUrl('mascot-wolf-wheat-reading.png')));
+  root.setProperty('--doctor-ok-image', cssImage(theme.mascotImage, assetUrl('doctor-wolf-wheat-ok.png')));
+  root.setProperty('--doctor-windows-image', cssImage(theme.mascotImage, assetUrl('empty-wolf-wheat-library.png')));
+}
+function applyTheme() {
+  const theme = currentTheme();
+  document.documentElement.dataset.theme = theme.id;
+  if (theme.id === 'custom') applyCustomThemeStyles();
+  else clearCustomThemeStyles();
+}
+async function setTheme(themeId) {
+  if (!THEME_IDS.includes(themeId)) return;
+  settings.theme = themeId;
+  applyTheme();
+  await saveSettings();
+  renderThemeGrid();
+  renderAppearanceSummary();
+  reRenderCurrent();
+}
 function applyLanguage() {
   i18n.setLang(settings.language || 'zh-CN');
   i18n.applyI18n();
+  applyTheme();
   applyIdentity();
   renderGreeting();
   refreshProfileChip();
@@ -858,6 +1088,7 @@ function showMoreMenu(anchor) {
   addItem(i18n.t('more.add_current_to_library'), { onClick: () => { const t = activeTab(); if (t) addToLibrary(t.url, t.title); } });
   addItem(i18n.t('more.open_all_profiles'), { onClick: showProfileOpenModal });
   addItem(i18n.t('more.manage_profiles'), { onClick: () => setRoute('profiles') });
+  addItem(i18n.t('more.appearance'),      { onClick: () => { appearanceExpanded = true; setRoute('settings'); setTimeout(() => $('theme-grid') && $('theme-grid').scrollIntoView({ block: 'start' }), 0); } });
   addItem(i18n.t('more.settings'),        { onClick: () => setRoute('settings') });
   addItem(i18n.t('more.shortcuts'),       { onClick: () => setRoute('shortcuts') });
   addItem(i18n.t('more.about'),           { onClick: () => setRoute('about') });
@@ -1093,7 +1324,7 @@ function renderHomeContinue() {
   const c = $('home-continue'); c.innerHTML = '';
   const items = uniqueRecentByHost(6);
   if (!items.length) {
-    c.innerHTML = '<div class="placeholder" style="grid-column: 1/-1; padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('home.empty_history')) + '</div></div>';
+    c.innerHTML = placeholderHtml(i18n.t('home.empty_history'), EMPTY_ASSETS.recent, 'grid-column:1/-1;padding:20px;height:auto;');
     return;
   }
   for (const e of items) c.appendChild(cardEl(e, () => openUrl(e.url)));
@@ -1102,7 +1333,7 @@ function renderHomeFavorites() {
   const c = $('home-favorites'); c.innerHTML = '';
   const items = bookmarks.filter(b => b.favorite !== false).slice(0, 6);
   if (!items.length) {
-    c.innerHTML = '<div class="placeholder" style="grid-column: 1/-1; padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('home.empty_favorites')) + '</div></div>';
+    c.innerHTML = placeholderHtml(i18n.t('home.empty_favorites'), EMPTY_ASSETS.favorites, 'grid-column:1/-1;padding:20px;height:auto;');
     return;
   }
   for (const e of items) c.appendChild(cardEl(e, () => openUrl(e.url)));
@@ -1110,7 +1341,7 @@ function renderHomeFavorites() {
 function renderHomeWindows() {
   const c = $('home-windows'); c.innerHTML = '';
   if (!tabs.length) {
-    c.innerHTML = '<div class="placeholder" style="padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('home.empty_windows')) + '</div></div>';
+    c.innerHTML = placeholderHtml(i18n.t('home.empty_windows'), EMPTY_ASSETS.windows, 'padding:20px;height:auto;');
     return;
   }
   for (const t of tabs) c.appendChild(winrowEl(t));
@@ -1141,6 +1372,10 @@ function renderFavorites() {
   const items = q ? base.filter(b => (b.title || '').toLowerCase().includes(q) || (b.url || '').toLowerCase().includes(q)) : base;
   $('fav-count').textContent = items.length + ' ' + i18n.t(items.length === 1 ? 'common.item' : 'common.items');
   const list = $('fav-list'); list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = placeholderHtml(i18n.t('home.empty_favorites'), EMPTY_ASSETS.favorites, 'padding:24px;height:auto;');
+    return;
+  }
   for (const e of items.slice(0, LIST_RENDER_LIMIT)) list.appendChild(entryEl(e, 'fav'));
 }
 function renderRecent() {
@@ -1148,6 +1383,10 @@ function renderRecent() {
   const items = q ? history.filter(h => (h.title || '').toLowerCase().includes(q) || (h.url || '').toLowerCase().includes(q)) : history;
   $('rec-count').textContent = items.length + ' ' + i18n.t(items.length === 1 ? 'common.item' : 'common.items');
   const list = $('rec-list'); list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = placeholderHtml(i18n.t('home.empty_history'), EMPTY_ASSETS.recent, 'padding:24px;height:auto;');
+    return;
+  }
   for (const e of items.slice(0, LIST_RENDER_LIMIT)) list.appendChild(entryEl(e, 'rec'));
 }
 function entryEl(e, kind) {
@@ -1188,7 +1427,7 @@ function renderWindows() {
   const list = $('win-list'); list.innerHTML = '';
   $('win-count').textContent = tabs.length + ' ' + i18n.t(tabs.length === 1 ? 'common.window' : 'common.windows');
   if (!tabs.length) {
-    list.innerHTML = '<div class="placeholder" style="padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('win.empty')) + '</div></div>';
+    list.innerHTML = placeholderHtml(i18n.t('win.empty'), EMPTY_ASSETS.windows, 'padding:24px;height:auto;');
     return;
   }
   for (const t of tabs) list.appendChild(winrowEl(t));
@@ -1477,7 +1716,7 @@ function renderAccounts() {
   const list = $('acct-list');
   list.innerHTML = '';
   if (!items.length) {
-    list.innerHTML = '<div class="placeholder" style="padding: 16px; height: auto;"><div>' + escapeHtml(i18n.t('acct.empty')) + '</div></div>';
+    list.innerHTML = placeholderHtml(i18n.t('acct.empty'), EMPTY_ASSETS.windows, 'padding:24px;height:auto;');
     return;
   }
   for (const account of items.slice(0, LIST_RENDER_LIMIT)) {
@@ -1596,6 +1835,324 @@ $('doctor-tile-grid').addEventListener('click', async () => {
 });
 
 // ---------- Settings ----------
+function themeSwatches(theme) {
+  if (theme && theme.id === 'custom') {
+    const c = customTheme().colors;
+    return [c.background, c.accent, c.soft];
+  }
+  return (theme && theme.swatches) || THEMES[0].swatches;
+}
+function renderAppearanceSummary() {
+  const group = $('appearance-group');
+  const panel = $('appearance-panel');
+  const name = $('appearance-current-name');
+  const swatches = $('appearance-current-swatches');
+  if (!group || !panel || !name || !swatches) return;
+  const theme = currentTheme();
+  group.classList.toggle('open', appearanceExpanded);
+  panel.hidden = !appearanceExpanded;
+  name.textContent = i18n.t(theme.nameKey);
+  swatches.innerHTML = themeSwatches(theme).map(color =>
+    '<span class="swatch" style="background:' + color + '"></span>'
+  ).join('');
+}
+function renderCustomPreview(preview) {
+  const c = customTheme().colors;
+  preview.classList.add('custom-preview');
+  preview.style.setProperty('--preview-bg', c.background);
+  preview.style.setProperty('--preview-panel', c.panel);
+  preview.style.setProperty('--preview-soft', rgba(c.soft, 0.7));
+  if (customTheme().badgeImage) preview.style.setProperty('--custom-badge-preview', cssImage(customTheme().badgeImage, ''));
+  else preview.style.removeProperty('--custom-badge-preview');
+  const mark = document.createElement('div');
+  mark.className = 'custom-preview-mark';
+  preview.appendChild(mark);
+}
+function renderThemeGrid() {
+  const grid = $('theme-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  for (const theme of THEMES) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'theme-card' + (theme.id === currentTheme().id ? ' active' : '');
+    btn.dataset.theme = theme.id;
+    const preview = document.createElement('div');
+    preview.className = 'theme-preview';
+    if (theme.custom) renderCustomPreview(preview);
+    else preview.style.backgroundImage = 'url(' + assetUrl('theme-preview-' + theme.id + '.png') + ')';
+    const swatches = document.createElement('div');
+    swatches.className = 'swatches';
+    for (const color of themeSwatches(theme)) {
+      const swatch = document.createElement('span');
+      swatch.className = 'swatch';
+      swatch.style.background = color;
+      swatches.appendChild(swatch);
+    }
+    const title = document.createElement('div');
+    title.className = 'theme-title';
+    title.textContent = i18n.t(theme.nameKey);
+    const desc = document.createElement('div');
+    desc.className = 'theme-desc';
+    desc.textContent = i18n.t(theme.descKey);
+    btn.appendChild(preview);
+    btn.appendChild(swatches);
+    btn.appendChild(title);
+    btn.appendChild(desc);
+    btn.addEventListener('click', () => {
+      if (theme.custom) appearanceExpanded = true;
+      setTheme(theme.id);
+    });
+    grid.appendChild(btn);
+  }
+}
+function renderCustomThemeEditor() {
+  const root = $('custom-theme-editor');
+  if (!root) return;
+  const theme = customTheme();
+  root.innerHTML = '';
+  const colorGrid = document.createElement('div');
+  colorGrid.className = 'custom-color-grid';
+  for (const [key, labelKey] of CUSTOM_COLOR_FIELDS) {
+    const field = document.createElement('div');
+    field.className = 'custom-color-field';
+    const label = document.createElement('label');
+    label.textContent = i18n.t(labelKey);
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = theme.colors[key];
+    input.addEventListener('input', () => updateCustomColor(key, input.value));
+    field.appendChild(label);
+    field.appendChild(input);
+    colorGrid.appendChild(field);
+  }
+  const assets = document.createElement('div');
+  assets.className = 'custom-assets';
+  assets.appendChild(makeAssetEditor('badge', i18n.t('theme.custom_badge'), 512, 512));
+  assets.appendChild(makeAssetEditor('mascot', i18n.t('theme.custom_mascot'), 1024, 720));
+  root.appendChild(colorGrid);
+  root.appendChild(assets);
+}
+function updateCustomColor(key, value) {
+  if (!isHexColor(value)) return;
+  const theme = customTheme();
+  theme.colors[key] = value;
+  settings.customTheme = theme;
+  if (settings.theme !== 'custom') settings.theme = 'custom';
+  applyTheme();
+  renderThemeGrid();
+  renderAppearanceSummary();
+  reRenderCurrent();
+  scheduleCustomThemeSave();
+}
+function scheduleCustomThemeSave() {
+  clearTimeout(customThemeSaveTimer);
+  customThemeSaveTimer = setTimeout(() => saveSettings(), 220);
+}
+function makeAssetEditor(kind, title, outW, outH) {
+  const editor = document.createElement('div');
+  editor.className = 'asset-editor';
+  const titleEl = document.createElement('div');
+  titleEl.className = 'asset-title';
+  titleEl.textContent = title;
+  const wrap = document.createElement('div');
+  wrap.className = 'asset-canvas-wrap';
+  const canvas = document.createElement('canvas');
+  canvas.width = kind === 'badge' ? 160 : 210;
+  canvas.height = 150;
+  wrap.appendChild(canvas);
+  const actions = document.createElement('div');
+  actions.className = 'asset-actions';
+  const upload = document.createElement('label');
+  upload.textContent = i18n.t('theme.custom_upload');
+  const file = document.createElement('input');
+  file.type = 'file';
+  file.accept = 'image/*';
+  upload.appendChild(file);
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.textContent = i18n.t('theme.custom_reset_asset');
+  actions.appendChild(upload);
+  actions.appendChild(reset);
+  const state = {
+    kind,
+    outW,
+    outH,
+    scale: 100,
+    offsetX: 0,
+    offsetY: 0,
+    tolerance: 54,
+    transparent: true,
+    image: null,
+    canvas,
+  };
+  const controls = [
+    makeAssetRange(state, 'scale', i18n.t('theme.custom_scale'), 40, 220, 1),
+    makeAssetRange(state, 'offsetX', i18n.t('theme.custom_x'), -100, 100, 1),
+    makeAssetRange(state, 'offsetY', i18n.t('theme.custom_y'), -100, 100, 1),
+    makeAssetRange(state, 'tolerance', i18n.t('theme.custom_tolerance'), 0, 140, 1),
+    makeAssetCheck(state, 'transparent', i18n.t('theme.custom_transparent')),
+  ];
+  file.addEventListener('change', () => {
+    const selected = file.files && file.files[0];
+    if (selected) loadEditorImage(selected, state);
+  });
+  reset.addEventListener('click', () => {
+    const theme = customTheme();
+    if (kind === 'badge') theme.badgeImage = null;
+    else theme.mascotImage = null;
+    settings.customTheme = theme;
+    if (settings.theme === 'custom') applyTheme();
+    renderThemeGrid();
+    renderAppearanceSummary();
+    reRenderCurrent();
+    saveSettings();
+    renderCustomThemeEditor();
+  });
+  editor.appendChild(titleEl);
+  editor.appendChild(wrap);
+  editor.appendChild(actions);
+  for (const control of controls) editor.appendChild(control);
+  drawExistingAssetPreview(state);
+  return editor;
+}
+function makeAssetRange(state, key, labelText, min, max, step) {
+  const row = document.createElement('div');
+  row.className = 'asset-control';
+  const label = document.createElement('label');
+  label.textContent = labelText;
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.value = String(state[key]);
+  input.addEventListener('input', () => {
+    state[key] = Number(input.value);
+    processEditorAsset(state);
+  });
+  row.appendChild(label);
+  row.appendChild(input);
+  return row;
+}
+function makeAssetCheck(state, key, labelText) {
+  const row = document.createElement('div');
+  row.className = 'asset-control';
+  const label = document.createElement('label');
+  label.textContent = labelText;
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.checked = !!state[key];
+  input.addEventListener('change', () => {
+    state[key] = input.checked;
+    processEditorAsset(state);
+  });
+  row.appendChild(label);
+  row.appendChild(input);
+  return row;
+}
+function drawExistingAssetPreview(state) {
+  const theme = customTheme();
+  const value = state.kind === 'badge' ? theme.badgeImage : theme.mascotImage;
+  const fallback = state.kind === 'badge' ? assetUrl('badge-wolf-wheat-browser.png') : assetUrl('mascot-wolf-wheat-tiny-footer.png');
+  const img = new Image();
+  img.onload = () => drawImageToPreview(state.canvas, img);
+  img.src = value || fallback;
+}
+function drawImageToPreview(canvas, img) {
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+  const w = img.width * scale;
+  const h = img.height * scale;
+  ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+}
+function loadEditorImage(file, state) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      state.image = img;
+      processEditorAsset(state);
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+function processEditorAsset(state) {
+  if (!state.image) return;
+  const out = document.createElement('canvas');
+  out.width = state.outW;
+  out.height = state.outH;
+  const ctx = out.getContext('2d');
+  ctx.clearRect(0, 0, out.width, out.height);
+  const baseScale = Math.min(out.width / state.image.width, out.height / state.image.height);
+  const scale = baseScale * (state.scale / 100);
+  const w = state.image.width * scale;
+  const h = state.image.height * scale;
+  const x = (out.width - w) / 2 + (state.offsetX / 100) * out.width * 0.35;
+  const y = (out.height - h) / 2 + (state.offsetY / 100) * out.height * 0.35;
+  ctx.drawImage(state.image, x, y, w, h);
+  if (state.transparent) removeEdgeBackground(ctx, out.width, out.height, state.tolerance, {
+    x0: Math.max(0, Math.floor(x)),
+    y0: Math.max(0, Math.floor(y)),
+    x1: Math.min(out.width - 1, Math.ceil(x + w) - 1),
+    y1: Math.min(out.height - 1, Math.ceil(y + h) - 1),
+  });
+  const img = new Image();
+  img.onload = () => drawImageToPreview(state.canvas, img);
+  const dataUrl = out.toDataURL('image/png');
+  img.src = dataUrl;
+  const theme = customTheme();
+  if (state.kind === 'badge') theme.badgeImage = dataUrl;
+  else theme.mascotImage = dataUrl;
+  settings.customTheme = theme;
+  if (settings.theme !== 'custom') settings.theme = 'custom';
+  applyTheme();
+  renderThemeGrid();
+  renderAppearanceSummary();
+  reRenderCurrent();
+  scheduleCustomThemeSave();
+}
+function removeEdgeBackground(ctx, width, height, tolerance, rect) {
+  const img = ctx.getImageData(0, 0, width, height);
+  const data = img.data;
+  const box = rect || { x0: 0, y0: 0, x1: width - 1, y1: height - 1 };
+  const mx = Math.floor((box.x0 + box.x1) / 2);
+  const my = Math.floor((box.y0 + box.y1) / 2);
+  const samples = [[box.x0,box.y0], [box.x1,box.y0], [box.x0,box.y1], [box.x1,box.y1], [mx,box.y0], [mx,box.y1], [box.x0,my], [box.x1,my]].map(([x, y]) => {
+    const i = (y * width + x) * 4;
+    return [data[i], data[i + 1], data[i + 2]];
+  });
+  const seen = new Uint8Array(width * height);
+  const queue = [];
+  const tol2 = tolerance * tolerance;
+  function nearBg(pos) {
+    const i = pos * 4;
+    for (const s of samples) {
+      const dr = data[i] - s[0], dg = data[i + 1] - s[1], db = data[i + 2] - s[2];
+      if (dr * dr + dg * dg + db * db <= tol2) return true;
+    }
+    return false;
+  }
+  function push(x, y) {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const pos = y * width + x;
+    if (seen[pos] || !nearBg(pos)) return;
+    seen[pos] = 1;
+    queue.push(pos);
+  }
+  for (let x = box.x0; x <= box.x1; x++) { push(x, box.y0); push(x, box.y1); }
+  for (let y = box.y0; y <= box.y1; y++) { push(box.x0, y); push(box.x1, y); }
+  for (let q = 0; q < queue.length; q++) {
+    const pos = queue[q];
+    const x = pos % width;
+    const y = Math.floor(pos / width);
+    push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1);
+  }
+  for (const pos of queue) data[pos * 4 + 3] = 0;
+  ctx.putImageData(img, 0, 0);
+}
 function renderSettings() {
   // Identity inputs
   const id = settings.identity || {};
@@ -1623,6 +2180,9 @@ function renderSettings() {
   setSwitch($('setting-restore-session'), !!settings.restoreSession);
   setSwitch($('setting-sidebar-collapsed'), !!settings.sidebarCollapsed);
   setSwitch($('setting-show-quick-note'), settings.showQuickNote !== false);
+  renderAppearanceSummary();
+  renderThemeGrid();
+  renderCustomThemeEditor();
   // Passwords list
   renderPasswords();
 }
@@ -1655,6 +2215,10 @@ $('id-reset').addEventListener('click', async () => {
   renderSettings();
 });
 
+$('appearance-toggle').addEventListener('click', () => {
+  appearanceExpanded = !appearanceExpanded;
+  renderAppearanceSummary();
+});
 $('setting-language').addEventListener('change', async (e) => {
   settings.language = e.target.value;
   await saveSettings();
@@ -1786,7 +2350,7 @@ function renderPasswords() {
   const items = q ? passwords.filter(p => (p.host || '').toLowerCase().includes(q) || (p.username || '').toLowerCase().includes(q)) : passwords;
   const list = $('pw-list'); list.innerHTML = '';
   if (!items.length) {
-    list.innerHTML = '<div class="placeholder" style="padding: 16px; height: auto;"><div>' + escapeHtml(i18n.t('pw.empty')) + '</div></div>';
+    list.innerHTML = placeholderHtml(i18n.t('pw.empty'), EMPTY_ASSETS.notes, 'padding:20px;height:auto;');
     return;
   }
   for (const p of items.slice(0, LIST_RENDER_LIMIT)) {
@@ -1889,7 +2453,7 @@ function renderNotes() {
   const list = $('notes-list');
   list.innerHTML = '';
   if (!items.length) {
-    list.innerHTML = '<div class="placeholder" style="padding: 20px; height: auto;"><div>' + escapeHtml(i18n.t('notes.empty_list')) + '</div></div>';
+    list.innerHTML = placeholderHtml(i18n.t('notes.empty_list'), EMPTY_ASSETS.notes, 'padding:20px;height:auto;');
   } else {
     for (const n of items) {
       const item = document.createElement('div');
@@ -1908,7 +2472,7 @@ function renderNoteEditor() {
   const editor = $('notes-editor');
   const note = notes.find(n => n.id === activeNoteId);
   if (!note) {
-    editor.innerHTML = '<div class="notes-empty-editor">' + escapeHtml(i18n.t('notes.empty_editor')) + '</div>';
+    editor.innerHTML = placeholderHtml(i18n.t('notes.empty_editor'), EMPTY_ASSETS.notes, 'height:100%;');
     return;
   }
   editor.innerHTML = '';
@@ -2027,7 +2591,7 @@ function renderTasks() {
 function renderTaskSection(container, items, emptyable) {
   container.innerHTML = '';
   if (!items.length) {
-    if (emptyable) container.innerHTML = '<div class="placeholder" style="padding: 16px; height: auto;"><div>' + escapeHtml(i18n.t('tasks.empty')) + '</div></div>';
+    if (emptyable) container.innerHTML = placeholderHtml(i18n.t('tasks.empty'), EMPTY_ASSETS.tasks, 'padding:20px;height:auto;');
     return;
   }
   for (const t of items) container.appendChild(taskRowEl(t));
@@ -2152,7 +2716,7 @@ function renderLibrary() {
   const grid = $('lib-grid');
   grid.innerHTML = '';
   if (!items.length) {
-    grid.innerHTML = '<div class="placeholder" style="grid-column:1/-1;padding:20px;height:auto;"><div>' + escapeHtml(i18n.t('lib.empty')) + '</div></div>';
+    grid.innerHTML = placeholderHtml(i18n.t('lib.empty'), EMPTY_ASSETS.library, 'grid-column:1/-1;padding:24px;height:auto;');
     return;
   }
   for (const it of items.slice(0, LIST_RENDER_LIMIT)) grid.appendChild(libCardEl(it));
