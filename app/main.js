@@ -430,6 +430,8 @@ function createBrowserWindowWithUrl(initialUrl, profileId, options = {}) {
     resizable,
     fullscreenable: resizable,
     title,
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    trafficLightPosition: { x: 12, y: 11 },
     backgroundColor: '#F7E8D1',
     webPreferences: {
       plugins: true,
