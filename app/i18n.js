@@ -285,6 +285,16 @@ const dicts = {
 
     'topbar.profile_tip': 'This window\'s profile. Click for more.',
     'game_mode.toggle': 'Toggle game mode',
+    'compat.indicator': 'Compat',
+    'compat.indicator_tip': 'Compatibility notice',
+    'compat.indicator_empty': 'No compatibility issue detected',
+    'compat.unity_title': 'Unity Web Player game detected',
+    'compat.unity_body': 'This page needs the old Unity Web Player / NPAPI plugin, which modern Chromium and Electron cannot load. Try the H5 version when available, or use an archive/player such as Flashpoint.',
+    'compat.legacy_title': 'Legacy plugin game detected',
+    'compat.legacy_body': 'This page depends on an old browser plugin that this runtime cannot load directly. Try an alternate version or an archive/player.',
+    'compat.open_h5': 'Open H5',
+    'compat.open_external': 'System Browser',
+    'compat.open_flashpoint': 'Flashpoint',
 
     'more.new_window_in': 'New Window in {name}',
     'more.add_current_to_library': 'Add current page to Library',
@@ -612,6 +622,16 @@ const dicts = {
 
     'topbar.profile_tip': '当前窗口的档案，点击查看更多',
     'game_mode.toggle': '切换游戏模式',
+    'compat.indicator': '兼容',
+    'compat.indicator_tip': '查看兼容提示',
+    'compat.indicator_empty': '当前未检测到兼容问题',
+    'compat.unity_title': '检测到 Unity Web Player 老游戏',
+    'compat.unity_body': '这个页面需要旧版 Unity Web Player / NPAPI 插件，现代 Chromium 和 Electron 无法直接加载。可优先尝试 H5 版；没有 H5 版时，建议用 Flashpoint 这类归档播放器查找替代资源。',
+    'compat.legacy_title': '检测到旧插件游戏',
+    'compat.legacy_body': '这个页面依赖旧浏览器插件，当前内核无法直接加载。可尝试站内替代版本，或使用归档播放器。',
+    'compat.open_h5': '打开 H5 版',
+    'compat.open_external': '系统浏览器',
+    'compat.open_flashpoint': 'Flashpoint',
 
     'more.new_window_in': '在 {name} 档案中开新窗口',
     'more.add_current_to_library': '把当前页加入游戏库',

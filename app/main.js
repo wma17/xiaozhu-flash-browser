@@ -1,4 +1,4 @@
-const { app, BrowserWindow, globalShortcut, session, ipcMain, Menu, screen, Notification } = require('electron');
+const { app, BrowserWindow, globalShortcut, session, ipcMain, Menu, screen, Notification, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -208,6 +208,12 @@ ipcMain.handle('store:set', (_e, name, data) => {
   return true;
 });
 ipcMain.handle('app:home-url', () => homeUrl);
+ipcMain.handle('external:open', (_e, url) => {
+  const target = String(url || '');
+  if (!/^(https?|file):\/\//i.test(target)) return false;
+  shell.openExternal(target);
+  return true;
+});
 ipcMain.handle('app:init', (e) => {
   const win = BrowserWindow.fromWebContents(e.sender);
   const data = pendingInit.get(win) || {};
@@ -417,12 +423,13 @@ function gridBounds(index, total) {
 function createBrowserWindowWithUrl(initialUrl, profileId, options = {}) {
   const wa = screen.getPrimaryDisplay().workArea;
   const bounds = options.bounds || { x: wa.x, y: wa.y, width: wa.width, height: wa.height };
+  const title = app.getName() || '小竹Flash浏览器 Orange Ver';
   const win = new BrowserWindow({
     x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
     autoHideMenuBar: true,
     resizable,
     fullscreenable: resizable,
-    title: '小竹Flash浏览器 Orange Ver',
+    title,
     backgroundColor: '#F7E8D1',
     webPreferences: {
       plugins: true,

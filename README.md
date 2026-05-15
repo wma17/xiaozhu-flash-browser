@@ -4,6 +4,7 @@
 
 - 独立档案：每个档案隔离 Cookie、localStorage 和缓存，适合小号多开。
 - Flash 游戏优化：保留 PPAPI Flash 支持，并默认启用安全变速代理。
+- 旧插件识别：遇到 Unity Web Player / NPAPI 老游戏时给出兼容提示和替代入口；这类游戏目前不能在小竹内核里直接运行。
 - 弹弹堂变速：正式默认使用第 6 档 `Tick + mach` 推荐组合；启动时固定回到 `1x`，避免上次加速影响登录。
 - 多开优化：关闭后台节流、减少后台服务，并提供窗口网格排列和账号网格打开。
 - 游戏模式：压缩浏览器 UI，把更多屏幕空间留给游戏。
@@ -47,8 +48,8 @@ scripts/build-dmg.sh
 
 生成文件示例：
 
-- `dist/XiaozhuFlashBrowser-macOS-v1.4.1.dmg`
-- `dist/XiaozhuFlashBrowser-macOS-v1.4.1.dmg.sha256`
+- `dist/XiaozhuFlashBrowser-OrangeVer-macOS-v1.5.1.dmg`
+- `dist/XiaozhuFlashBrowser-OrangeVer-macOS-v1.5.1.dmg.sha256`
 
 `dist/` 不进入 Git 仓库，发布包请上传到 GitHub Release。
 

@@ -38,6 +38,7 @@ const preloadPath = 'file://' + document.location.pathname.split('/').slice(0, -
 const HISTORY_LIMIT = 2000;
 const HISTORY_REPEAT_WRITE_MS = 30000;
 const LIST_RENDER_LIMIT = 400;
+const FLASHPOINT_URL = 'https://flashpointarchive.org/downloads/';
 let historySaveTimer = null;
 const PROFILE_COLORS = ['#F4A23C', '#C86B2A', '#8B4E2A', '#5B4636', '#E09F3E', '#9E6240', '#4C7A5A', '#486F9E'];
 const PROFILE_AVATARS = [
@@ -266,6 +267,7 @@ function reRenderCurrent() {
   else if (currentRoute === 'notes') renderNotes();
   else if (currentRoute === 'tasks') renderTasks();
   else if (currentRoute === 'library') renderLibrary();
+  updateCompatUI();
 }
 
 // ---------- routing ----------
@@ -285,6 +287,7 @@ function setRoute(name) {
   }
   updateNavButtons();
   updateBookmarkStar();
+  updateCompatUI();
   if (name === 'home') renderHome();
   else if (name === 'favorites') renderFavorites();
   else if (name === 'recent') renderRecent();
@@ -336,6 +339,8 @@ function createTab(url) {
     loading: false, zoom: 1, fit: false,
     ready: false,
     muted: false,
+    compat: null,
+    compatDismissed: false,
     profileId: profile ? profile.id : null,
     currentHost: null,
   };
@@ -387,7 +392,16 @@ function createTab(url) {
   };
   tab._applyZoom = applyZoom;
 
-  wv.addEventListener('did-start-loading', () => { tab.loading = true; stripEl.classList.add('loading'); if (id === activeId) updateNavButtons(); });
+  wv.addEventListener('did-start-loading', () => {
+    tab.loading = true;
+    tab.compat = null;
+    tab.compatDismissed = false;
+    stripEl.classList.add('loading');
+    if (id === activeId) {
+      updateNavButtons();
+      updateCompatUI();
+    }
+  });
   wv.addEventListener('did-stop-loading', () => { tab.loading = false; stripEl.classList.remove('loading'); if (id === activeId) updateNavButtons(); });
   wv.addEventListener('dom-ready', () => {
     tab.ready = true;
@@ -419,7 +433,11 @@ function createTab(url) {
   wv.addEventListener('ipc-message', (e) => {
     try {
       const payload = (e.args && e.args[0]) || {};
-      if (e.channel === 'pw:request') {
+      if (e.channel === 'compat:detected') {
+        tab.compat = normalizeCompatIssue(payload, tab);
+        tab.compatDismissed = false;
+        if (id === activeId) updateCompatUI();
+      } else if (e.channel === 'pw:request') {
         const host = payload.host || '';
         tab.currentHost = host;
         const matches = findAllCredentials(tab.profileId, host);
@@ -476,6 +494,7 @@ function activateTab(id) {
   updateZoomIndicator();
   updateAccountIndicator();
   updateAudioButtons();
+  updateCompatUI();
 }
 
 function closeTab(id) {
@@ -488,6 +507,7 @@ function closeTab(id) {
   if (tabs.length === 0) {
     activeId = null;
     updateAudioButtons();
+    updateCompatUI();
     setRoute('home');
     return;
   }
@@ -573,6 +593,75 @@ function setTabMuted(tab, muted) {
   if (!tab) return;
   tab.muted = !!muted;
   applyAudioMute(tab);
+}
+function html5FallbackUrl(url) {
+  try {
+    const u = new URL(url || '');
+    const match = u.hostname.endsWith('4399.com') && u.pathname.match(/^\/flash\/(\d+)(?:_\d+)?\.htm$/i);
+    if (match) return 'https://www.4399.com/html5/' + match[1] + '.htm';
+  } catch (e) {}
+  return null;
+}
+function normalizeCompatIssue(payload, tab) {
+  const raw = payload && typeof payload === 'object' ? payload : {};
+  const url = raw.url || (tab && tab.url) || '';
+  return {
+    kind: raw.kind || 'legacy-plugin',
+    url,
+    title: raw.title || (tab && tab.title) || '',
+    host: raw.host || hostOf(url),
+    html5Url: raw.html5Url || html5FallbackUrl(url),
+  };
+}
+function activeCompatIssue() {
+  const tab = activeTab();
+  return tab && tab.compat ? tab.compat : null;
+}
+function updateCompatUI() {
+  const tab = activeTab();
+  const issue = tab && tab.compat ? tab.compat : null;
+  const indicator = $('compat-indicator');
+  if (indicator) {
+    indicator.classList.toggle('on', !!issue);
+    indicator.textContent = issue ? i18n.t('compat.indicator') : '';
+    indicator.title = issue ? i18n.t('compat.indicator_tip') : i18n.t('compat.indicator_empty');
+  }
+  const banner = $('compat-banner');
+  if (!banner) return;
+  const visible = !!issue && currentRoute === 'browser' && !(tab && tab.compatDismissed);
+  banner.classList.toggle('visible', visible);
+  if (!issue) return;
+  const title = $('compat-title');
+  const body = $('compat-body');
+  if (title) title.textContent = i18n.t(issue.kind === 'unity-web-player' ? 'compat.unity_title' : 'compat.legacy_title');
+  if (body) body.textContent = i18n.t(issue.kind === 'unity-web-player' ? 'compat.unity_body' : 'compat.legacy_body');
+  const h5 = $('compat-open-h5');
+  if (h5) h5.hidden = !issue.html5Url;
+}
+function showCompatBanner() {
+  const tab = activeTab();
+  if (!tab || !tab.compat) return;
+  tab.compatDismissed = false;
+  updateCompatUI();
+}
+function dismissCompatBanner() {
+  const tab = activeTab();
+  if (!tab) return;
+  tab.compatDismissed = true;
+  updateCompatUI();
+}
+function openCompatHtml5() {
+  const issue = activeCompatIssue();
+  if (!issue || !issue.html5Url) return;
+  openUrl(issue.html5Url);
+}
+function openCompatExternal() {
+  const tab = activeTab();
+  const target = (tab && tab.url) || (activeCompatIssue() && activeCompatIssue().url);
+  if (target) ipcRenderer.invoke('external:open', target);
+}
+function openFlashpoint() {
+  ipcRenderer.invoke('external:open', FLASHPOINT_URL);
 }
 function updateGameToolsButton() {
   const btn = $('game-tools-btn');
@@ -2032,6 +2121,14 @@ $('game-tools-btn').addEventListener('click', (ev) => {
   ev.stopPropagation();
   showGameToolsMenu(ev.currentTarget);
 });
+$('compat-indicator').addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  showCompatBanner();
+});
+$('compat-close').addEventListener('click', dismissCompatBanner);
+$('compat-open-h5').addEventListener('click', openCompatHtml5);
+$('compat-open-external').addEventListener('click', openCompatExternal);
+$('compat-open-flashpoint').addEventListener('click', openFlashpoint);
 $('profile-open-select-all').addEventListener('click', () => setProfileOpenChecks(true));
 $('profile-open-select-none').addEventListener('click', () => setProfileOpenChecks(false));
 $('profile-open-cancel').addEventListener('click', hideProfileOpenModal);
