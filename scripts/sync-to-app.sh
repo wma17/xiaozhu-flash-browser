@@ -6,6 +6,8 @@ APP_BUNDLE="${APP_BUNDLE:-/Applications/小竹Flash浏览器.app}"
 APP_RESOURCES="$APP_BUNDLE/Contents/Resources/app"
 APP_VERSION="$(plutil -extract version raw -o - "$ROOT/app/package.json")"
 INFO_PLIST="$APP_BUNDLE/Contents/Info.plist"
+TARGET_PRODUCT_NAME="$(plutil -extract productName raw -o - "$APP_RESOURCES/package.json" 2>/dev/null || true)"
+TARGET_DESCRIPTION="$(plutil -extract description raw -o - "$APP_RESOURCES/package.json" 2>/dev/null || true)"
 
 if [[ ! -d "$APP_BUNDLE" ]]; then
   echo "App bundle not found: $APP_BUNDLE" >&2
@@ -16,6 +18,13 @@ rsync -a --delete \
   --exclude='plugins/PepperFlashPlayer.plugin' \
   --exclude='plugins/PepperFlashPlayerSpeed.plugin' \
   "$ROOT/app/" "$APP_RESOURCES/"
+
+if [[ -n "$TARGET_PRODUCT_NAME" ]]; then
+  plutil -replace productName -string "$TARGET_PRODUCT_NAME" "$APP_RESOURCES/package.json"
+fi
+if [[ -n "$TARGET_DESCRIPTION" ]]; then
+  plutil -replace description -string "$TARGET_DESCRIPTION" "$APP_RESOURCES/package.json"
+fi
 
 if [[ "${BUILD_SPEED_SHIM:-1}" == "1" ]]; then
   "$ROOT/scripts/build-speed-shim.sh"

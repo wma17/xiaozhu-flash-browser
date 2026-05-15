@@ -5,6 +5,10 @@
 const { ipcRenderer } = require('electron');
 
 const LOGIN_TEXT = /login|log in|sign in|登录|登入|提交|进入|立即登录|马上登录|确定|确认|开始游戏|进入游戏/i;
+const UNITY_ERROR_TEXT = /Unity Web Player|Sorry,\s*Chrome can't run this app|NPAPI plugins|无法加载Unity3D游戏|Unity3D/i;
+const UNITY_PAGE_MARK = /_gameMark\s*=\s*["']4\|/i;
+const UNITY_ASSET_MARK = /\.unity3d\b|UnityObject|Unity Web Player|webplayer/i;
+const reportedCompat = new Set();
 
 function findLoginFormIn(doc) {
   try {
@@ -55,6 +59,51 @@ function requestAutofill() {
   } catch (e) {}
 }
 
+function absoluteUrl(value) {
+  try { return new URL(value, location.href).href; }
+  catch (e) { return null; }
+}
+
+function mobileHtml5Url() {
+  try {
+    const metas = Array.from(document.querySelectorAll('meta'));
+    const meta = metas.find(el => String(el.getAttribute('http-equiv') || '').toLowerCase() === 'mobile-agent');
+    const content = meta ? (meta.getAttribute('content') || '') : '';
+    const match = content.match(/url\s*=\s*([^;,]+)/i);
+    if (match) return absoluteUrl(match[1].trim());
+  } catch (e) {}
+  try {
+    const match = location.href.match(/4399\.com\/flash\/(\d+)(?:_\d+)?\.htm/i);
+    if (match) return 'https://www.4399.com/html5/' + match[1] + '.htm';
+  } catch (e) {}
+  return null;
+}
+
+function reportCompatibilityIssue(kind, details) {
+  const key = kind + '|' + location.href;
+  if (reportedCompat.has(key)) return;
+  reportedCompat.add(key);
+  ipcRenderer.sendToHost('compat:detected', Object.assign({
+    kind,
+    url: location.href,
+    title: document.title || '',
+    host: location.hostname,
+  }, details || {}));
+}
+
+function detectLegacyPluginPage() {
+  try {
+    const html = document.documentElement ? document.documentElement.innerHTML : '';
+    const text = document.body ? document.body.innerText : '';
+    const isUnityWebPlayer =
+      UNITY_ERROR_TEXT.test(text) ||
+      UNITY_PAGE_MARK.test(html) ||
+      (UNITY_ASSET_MARK.test(html) && /Unity Web Player|unity3d/i.test(html + '\n' + text));
+    if (!isUnityWebPlayer) return;
+    reportCompatibilityIssue('unity-web-player', { html5Url: mobileHtml5Url() });
+  } catch (e) {}
+}
+
 function fillForm(cred) {
   try {
     const f = findAnyLoginForm();
@@ -96,8 +145,12 @@ ipcRenderer.on('pw:capture-now', () => {
 // Auto-request autofill at several points — pages often load forms late.
 window.addEventListener('DOMContentLoaded', requestAutofill);
 window.addEventListener('load', requestAutofill);
+window.addEventListener('DOMContentLoaded', detectLegacyPluginPage);
+window.addEventListener('load', detectLegacyPluginPage);
 setTimeout(requestAutofill, 800);
 setTimeout(requestAutofill, 2000);
+setTimeout(detectLegacyPluginPage, 800);
+setTimeout(detectLegacyPluginPage, 2000);
 
 // Capture submit events (works for real <form> submissions).
 function onSubmit(e) {
@@ -142,6 +195,7 @@ let observerTriggered = false;
 try {
   const obs = new MutationObserver(() => {
     if (observerTriggered) return;
+    detectLegacyPluginPage();
     if (findAnyLoginForm()) {
       observerTriggered = true;
       requestAutofill();
