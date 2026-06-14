@@ -52,8 +52,8 @@ scripts/build-dmg.sh
 
 生成文件示例：
 
-- `dist/XiaozhuFlashBrowser-macOS-v1.5.1.dmg`
-- `dist/XiaozhuFlashBrowser-macOS-v1.5.1.dmg.sha256`
+- `dist/XiaozhuFlashBrowser-macOS-v1.5.2.dmg`
+- `dist/XiaozhuFlashBrowser-macOS-v1.5.2.dmg.sha256`
 
 `dist/` 不进入 Git 仓库，发布包请上传到 GitHub Release。
 
