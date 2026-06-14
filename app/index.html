@@ -671,6 +671,11 @@
     #tab-strip .speed-ind.sealed { display: none; }
     #tab-strip .speed-ind:hover { background: #D7ECD8; border-color: rgba(76, 122, 90, .5); }
     #tab-strip .speed-ind.hot { background: #FFE8A8; border-color: rgba(200, 107, 42, .38); color: var(--deep-orange); }
+    .speed-menu .menu-item .hint {
+      margin-left: auto;
+      color: var(--text-secondary);
+      font: 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
     #tab-strip .tool-ind {
       min-width: 46px; height: 22px; display: flex; align-items: center; justify-content: center;
       box-sizing: border-box; padding: 0 8px; border-radius: 8px;
@@ -710,6 +715,84 @@
     }
     webview { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
     webview.active { display: flex; }
+    #measure-overlay {
+      position: absolute; left: 0; right: 0; bottom: 0; top: 30px;
+      z-index: 25;
+      display: none;
+      pointer-events: none;
+      background: rgba(10, 14, 16, 0.04);
+    }
+    #measure-overlay.visible { display: block; }
+    #measure-canvas {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      pointer-events: auto;
+      cursor: crosshair;
+    }
+    #measure-panel {
+      position: absolute;
+      left: 12px; top: 12px;
+      width: min(430px, calc(100% - 24px));
+      background: rgba(22, 27, 31, 0.74);
+      color: #F8FAF8;
+      border: 1px solid rgba(255,255,255,.24);
+      border-radius: 10px;
+      box-shadow: 0 12px 34px rgba(0,0,0,.24);
+      backdrop-filter: blur(10px);
+      pointer-events: auto;
+      overflow: hidden;
+    }
+    #measure-panel .measure-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255,255,255,.16);
+    }
+    #measure-panel .measure-title {
+      font-weight: 800;
+      font-size: 12px;
+      flex: 1;
+      min-width: 0;
+    }
+    #measure-panel .measure-mode {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.14);
+      color: rgba(255,255,255,.86);
+      white-space: nowrap;
+    }
+    #measure-panel .measure-readout {
+      padding: 9px 10px 3px;
+      font-size: 12px;
+      line-height: 1.45;
+      min-height: 18px;
+    }
+    #measure-panel .measure-scale {
+      padding: 0 10px 9px;
+      color: rgba(255,255,255,.70);
+      font-size: 11px;
+    }
+    #measure-panel .measure-actions {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      padding: 0 10px 10px;
+    }
+    #measure-panel button {
+      font: inherit;
+      font-size: 11px;
+      color: #F8FAF8;
+      background: rgba(255,255,255,.12);
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 7px;
+      padding: 5px 9px;
+      cursor: default;
+    }
+    #measure-panel button:hover { background: rgba(255,255,255,.22); }
+    #measure-panel .measure-close {
+      width: 24px; height: 24px;
+      padding: 0;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+    }
     #compat-banner {
       position: absolute; left: 10px; right: 10px; top: 40px; z-index: 20;
       display: none; align-items: center; gap: 12px;
@@ -745,6 +828,7 @@
     body.game-mode #tab-strip .zc .zoom-ind { display: none; }
     body.game-mode #tab-strip .tool-ind { height: 20px; min-width: 42px; padding: 0 8px; font-size: 10px; }
     body.game-mode #webviews-container { top: 26px; }
+    body.game-mode #measure-overlay { top: 26px; }
     body.game-mode #compat-banner { top: 34px; }
 
     /* Shortcuts */
@@ -1050,6 +1134,114 @@
     }
     .switch.on { background: var(--main-orange); }
     .switch.on::after { left: 20px; }
+    .speed-preset-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+      max-width: 440px;
+    }
+    .speed-preset-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font: inherit;
+      font-size: 12px;
+      padding: 5px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--panel-white);
+      color: var(--text-primary);
+      cursor: default;
+    }
+    .speed-preset-chip.active {
+      background: var(--main-orange);
+      color: var(--on-primary);
+      border-color: transparent;
+    }
+    .speed-preset-chip .remove {
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: inherit;
+      opacity: .68;
+      font-size: 12px;
+    }
+    .speed-preset-chip .remove:hover {
+      background: rgba(0,0,0,.14);
+      opacity: 1;
+    }
+    .settings-inline {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+    .settings-inline input {
+      width: 90px;
+      height: 32px;
+      box-sizing: border-box;
+      font: inherit;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-white);
+      color: var(--text-primary);
+      outline: none;
+    }
+    .shortcut-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      width: 100%;
+    }
+    .shortcut-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 34px;
+      border-top: 1px dashed var(--border);
+      padding-top: 6px;
+    }
+    .shortcut-row:first-child { border-top: 0; padding-top: 0; }
+    .shortcut-action {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+    .shortcut-action input {
+      width: 74px;
+      height: 30px;
+      box-sizing: border-box;
+      font: inherit;
+      padding: 0 8px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-white);
+      color: var(--text-primary);
+      outline: none;
+    }
+    .shortcut-capture {
+      min-width: 86px;
+      font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      padding: 7px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--panel-white);
+      color: var(--text-primary);
+      cursor: default;
+    }
+    .shortcut-capture.recording {
+      background: var(--warning-bg);
+      border-color: var(--warning-border);
+      color: var(--deep-orange);
+    }
 
     .warn {
       background: var(--warning-bg);
@@ -1731,6 +1923,51 @@
             </div>
           </div>
 
+          <div class="settings-group" id="speed-tools-group">
+            <h3 data-i18n="set.speed_tools"></h3>
+            <div class="settings-row">
+              <div>
+                <div class="label" data-i18n="speed.presets"></div>
+                <div class="sub" data-i18n="speed.presets_sub"></div>
+              </div>
+              <div class="speed-preset-list" id="speed-preset-list"></div>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="label" data-i18n="speed.add_preset"></div>
+              </div>
+              <div class="settings-inline">
+                <input id="setting-speed-preset-input" placeholder="4.5" />
+                <button id="setting-speed-preset-add" data-i18n="speed.add_preset_btn"></button>
+                <button id="setting-speed-presets-reset" data-i18n="speed.reset_presets"></button>
+              </div>
+            </div>
+            <div class="settings-row" style="align-items: flex-start;">
+              <div>
+                <div class="label" data-i18n="shortcut.speed_title"></div>
+                <div class="sub" data-i18n="shortcut.speed_sub"></div>
+              </div>
+              <div class="shortcut-list" id="speed-shortcut-list"></div>
+            </div>
+            <div class="settings-row" style="align-items: flex-start;">
+              <div>
+                <div class="label" data-i18n="shortcut.speed_slots"></div>
+                <div class="sub" data-i18n="shortcut.speed_slots_sub"></div>
+              </div>
+              <div class="shortcut-list" id="speed-hotkey-list"></div>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="label" data-i18n="measure.scale_title"></div>
+                <div class="sub" data-i18n="measure.scale_sub"></div>
+              </div>
+              <div class="settings-inline">
+                <span class="kbd-hint" id="measure-scale-setting"></span>
+                <button id="measure-scale-clear" data-i18n="measure.scale_clear"></button>
+              </div>
+            </div>
+          </div>
+
           <div class="settings-group">
             <h3 data-i18n="set.privacy"></h3>
             <div class="settings-row">
@@ -1835,6 +2072,23 @@
           </div>
         </div>
         <div id="webviews-container"></div>
+        <div id="measure-overlay">
+          <canvas id="measure-canvas"></canvas>
+          <div id="measure-panel">
+            <div class="measure-head">
+              <div class="measure-title" data-i18n="measure.title"></div>
+              <div class="measure-mode" id="measure-mode"></div>
+              <button id="measure-close" class="measure-close" data-i18n-title="common.close">×</button>
+            </div>
+            <div class="measure-readout" id="measure-readout"></div>
+            <div class="measure-scale" id="measure-scale"></div>
+            <div class="measure-actions">
+              <button id="measure-reset" data-i18n="measure.reset_points"></button>
+              <button id="measure-scale-start" data-i18n="measure.scale_start"></button>
+              <button id="measure-scale-clear-inline" data-i18n="measure.scale_clear"></button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>

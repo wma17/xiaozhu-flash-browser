@@ -449,6 +449,17 @@ function createBrowserWindowWithUrl(initialUrl, profileId, options = {}) {
       event.preventDefault();
       if (url) win.webContents.send('action', 'new-tab', url);
     });
+    wc.on('before-input-event', (_event, input) => {
+      if (!input || input.type !== 'keyDown') return;
+      win.webContents.send('shortcut:input', {
+        key: input.key,
+        code: input.code,
+        alt: !!input.alt,
+        control: !!input.control,
+        meta: !!input.meta,
+        shift: !!input.shift,
+      });
+    });
     if (typeof wc.setWindowOpenHandler === 'function') {
       wc.setWindowOpenHandler(({ url }) => {
         if (url) win.webContents.send('action', 'new-tab', url);

@@ -17,6 +17,22 @@ let activeNoteId = null;
 let editingProfileId = null;
 let editingAccountId = null;
 let notesSaveTimer = null;
+const DEFAULT_SPEED_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 5, 6, 8, 10];
+const DEFAULT_SPEED_SHORTCUTS = {
+  prev: 'Alt+BracketLeft',
+  next: 'Alt+BracketRight',
+  reset: 'Alt+Digit0',
+  measure: 'Alt+KeyM',
+};
+const DEFAULT_SPEED_HOTKEYS = [
+  { factor: 1, shortcut: 'Alt+Digit1' },
+  { factor: 2, shortcut: 'Alt+Digit2' },
+  { factor: 3, shortcut: 'Alt+Digit3' },
+  { factor: 5, shortcut: 'Alt+Digit4' },
+];
+const DEFAULT_MEASURE = {
+  scalePixelsPer10: null,
+};
 let settings = {
   language: 'zh-CN',
   defaultProfileId: 'main',
@@ -24,6 +40,10 @@ let settings = {
   sidebarCollapsed: false,
   speedProfile: 'native-ddt',
   speedProfileVersion: 5,
+  speedPresets: DEFAULT_SPEED_PRESETS.slice(),
+  speedShortcuts: Object.assign({}, DEFAULT_SPEED_SHORTCUTS),
+  speedHotkeys: DEFAULT_SPEED_HOTKEYS.map(h => Object.assign({}, h)),
+  measure: Object.assign({}, DEFAULT_MEASURE),
   theme: 'xiaozhu-native',
   showQuickNote: true,
   globalMuted: false,
@@ -37,6 +57,16 @@ let pendingSavePrompt = null;
 let profileOpenUrl = null;
 let windowProfileId = null; // each window is bound to one profile (Chrome-style)
 let menuCloseHandler = null;
+let shortcutCaptureTarget = null;
+let measuring = {
+  active: false,
+  mode: 'measure',
+  origin: null,
+  target: null,
+  scaleStart: null,
+  scaleEnd: null,
+  hover: null,
+};
 const preloadPath = 'file://' + document.location.pathname.split('/').slice(0, -1).join('/') + '/webview-preload.js';
 const HISTORY_LIMIT = 2000;
 const HISTORY_REPEAT_WRITE_MS = 30000;
@@ -182,6 +212,11 @@ const SPEED_PROFILES = [
 ];
 const SPEED_PROFILE_KEYS = SPEED_PROFILES.map(p => p.key);
 const SPEED_PROFILE_BY_KEY = SPEED_PROFILES.reduce((acc, p) => { acc[p.key] = p; return acc; }, {});
+const SPEED_PROFILE_MENU_KEYS = ['native-ddt', 'native-combo', 'native-all-schedule'];
+const MODIFIER_CODES = new Set([
+  'AltLeft', 'AltRight', 'ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight',
+  'ShiftLeft', 'ShiftRight', 'CapsLock', 'Fn', 'FnLock',
+]);
 
 // ---------- storage ----------
 async function loadStores() {
@@ -233,6 +268,26 @@ async function loadStores() {
   }
   if (settings.speedAutoMute != null) {
     delete settings.speedAutoMute;
+    settingsChanged = true;
+  }
+  const normalizedSpeedPresets = normalizeSpeedPresets(settings.speedPresets);
+  if (JSON.stringify(normalizedSpeedPresets) !== JSON.stringify(settings.speedPresets || null)) {
+    settings.speedPresets = normalizedSpeedPresets;
+    settingsChanged = true;
+  }
+  const normalizedSpeedShortcuts = normalizeSpeedShortcuts(settings.speedShortcuts);
+  if (JSON.stringify(normalizedSpeedShortcuts) !== JSON.stringify(settings.speedShortcuts || null)) {
+    settings.speedShortcuts = normalizedSpeedShortcuts;
+    settingsChanged = true;
+  }
+  const normalizedSpeedHotkeys = normalizeSpeedHotkeys(settings.speedHotkeys);
+  if (JSON.stringify(normalizedSpeedHotkeys) !== JSON.stringify(settings.speedHotkeys || null)) {
+    settings.speedHotkeys = normalizedSpeedHotkeys;
+    settingsChanged = true;
+  }
+  const normalizedMeasure = normalizeMeasureSettings(settings.measure);
+  if (JSON.stringify(normalizedMeasure) !== JSON.stringify(settings.measure || null)) {
+    settings.measure = normalizedMeasure;
     settingsChanged = true;
   }
   if (settingsChanged) await ipcRenderer.invoke('store:set', 'settings', settings);
@@ -288,6 +343,50 @@ function escapeHtml(s) {
 }
 function isHexColor(value) {
   return /^#[0-9a-f]{6}$/i.test(String(value || ''));
+}
+function clampSpeedPreset(value) {
+  const n = Number(String(value || '').replace(/x$/i, ''));
+  if (!Number.isFinite(n)) return null;
+  return Math.round(Math.max(0.5, Math.min(10, n)) * 100) / 100;
+}
+function normalizeSpeedPresets(value) {
+  const source = Array.isArray(value) ? value : DEFAULT_SPEED_PRESETS;
+  const seen = new Set();
+  const out = [];
+  for (const item of source) {
+    const n = clampSpeedPreset(item);
+    if (n == null) continue;
+    const key = n.toFixed(2);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(n);
+  }
+  if (!seen.has('1.00')) out.push(1);
+  return out.sort((a, b) => a - b);
+}
+function normalizeSpeedShortcuts(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return Object.assign({}, DEFAULT_SPEED_SHORTCUTS, source);
+}
+function normalizeSpeedHotkeys(value) {
+  const source = Array.isArray(value) ? value : DEFAULT_SPEED_HOTKEYS;
+  const out = [];
+  for (let i = 0; i < Math.max(DEFAULT_SPEED_HOTKEYS.length, source.length); i++) {
+    const base = DEFAULT_SPEED_HOTKEYS[i] || { factor: 1, shortcut: '' };
+    const item = source[i] || {};
+    out.push({
+      factor: clampSpeedPreset(item.factor != null ? item.factor : base.factor) || base.factor,
+      shortcut: typeof item.shortcut === 'string' ? item.shortcut : base.shortcut,
+    });
+  }
+  return out.slice(0, 6);
+}
+function normalizeMeasureSettings(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const scale = Number(source.scalePixelsPer10);
+  return {
+    scalePixelsPer10: Number.isFinite(scale) && scale > 0 ? scale : null,
+  };
 }
 function normalizeCustomTheme(value) {
   const source = value && typeof value === 'object' ? value : {};
@@ -503,6 +602,7 @@ function setRoute(name) {
   else if (name === 'notes') renderNotes();
   else if (name === 'tasks') renderTasks();
   else if (name === 'library') renderLibrary();
+  if (name === 'browser' && measuring.active) setTimeout(resizeMeasureCanvas, 0);
 }
 
 document.querySelectorAll('.nav-item').forEach(el => {
@@ -527,6 +627,7 @@ function setGameMode(on) {
   document.body.classList.toggle('game-mode', !!on);
   const btn = $('game-mode-btn');
   if (btn) btn.textContent = on ? '↙' : '⛶';
+  if (measuring.active) setTimeout(resizeMeasureCanvas, 0);
 }
 $('game-mode-btn').addEventListener('click', () => setGameMode(!document.body.classList.contains('game-mode')));
 window.addEventListener('keydown', (e) => {
@@ -867,10 +968,247 @@ function openCompatExternal() {
 function openFlashpoint() {
   ipcRenderer.invoke('external:open', FLASHPOINT_URL);
 }
+function measureCanvas() { return $('measure-canvas'); }
+function measureOverlay() { return $('measure-overlay'); }
+function measurePointFromEvent(ev) {
+  const canvas = measureCanvas();
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: Math.max(0, Math.min(rect.width, ev.clientX - rect.left)),
+    y: Math.max(0, Math.min(rect.height, ev.clientY - rect.top)),
+  };
+}
+function resizeMeasureCanvas() {
+  const canvas = measureCanvas();
+  const overlay = measureOverlay();
+  if (!canvas || !overlay) return;
+  const rect = overlay.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(rect.width * dpr));
+  const h = Math.max(1, Math.round(rect.height * dpr));
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+  drawMeasureOverlay();
+}
+function setMeasureActive(active, mode) {
+  const overlay = measureOverlay();
+  if (!overlay) return;
+  measuring.active = !!active;
+  if (mode) measuring.mode = mode;
+  overlay.classList.toggle('visible', measuring.active);
+  updateGameToolsButton();
+  if (measuring.active) {
+    setRoute('browser');
+    resizeMeasureCanvas();
+  }
+  updateMeasureReadout();
+}
+function toggleMeasureOverlay() {
+  const tab = activeTab();
+  if (!tab && !measuring.active) return;
+  setMeasureActive(!measuring.active, 'measure');
+}
+function startScaleCalibration() {
+  measuring.scaleStart = null;
+  measuring.scaleEnd = null;
+  setMeasureActive(true, 'scale');
+}
+function resetMeasurePoints() {
+  measuring.origin = null;
+  measuring.target = null;
+  measuring.hover = null;
+  drawMeasureOverlay();
+  updateMeasureReadout();
+}
+async function clearMeasureScale() {
+  settings.measure = normalizeMeasureSettings(settings.measure);
+  settings.measure.scalePixelsPer10 = null;
+  await saveSettings();
+  if (currentRoute === 'settings') renderSpeedToolSettings();
+  drawMeasureOverlay();
+  updateMeasureReadout();
+}
+function setMeasureTarget(point) {
+  if (!measuring.origin) {
+    measuring.origin = point;
+    measuring.target = null;
+  } else {
+    measuring.target = point;
+  }
+  drawMeasureOverlay();
+  updateMeasureReadout();
+}
+async function handleMeasureClick(ev) {
+  if (!measuring.active) return;
+  if (ev.target && ev.target.closest && ev.target.closest('#measure-panel')) return;
+  const point = measurePointFromEvent(ev);
+  if (measuring.mode === 'scale') {
+    if (!measuring.scaleStart) {
+      measuring.scaleStart = point;
+    } else {
+      measuring.scaleEnd = point;
+      const dx = Math.abs(measuring.scaleEnd.x - measuring.scaleStart.x);
+      const direct = Math.hypot(measuring.scaleEnd.x - measuring.scaleStart.x, measuring.scaleEnd.y - measuring.scaleStart.y);
+      settings.measure = normalizeMeasureSettings(settings.measure);
+      settings.measure.scalePixelsPer10 = dx > 2 ? dx : direct;
+      await saveSettings();
+      measuring.mode = 'measure';
+      if (currentRoute === 'settings') renderSpeedToolSettings();
+    }
+    drawMeasureOverlay();
+    updateMeasureReadout();
+    return;
+  }
+  setMeasureTarget(point);
+}
+function handleMeasureMove(ev) {
+  if (!measuring.active) return;
+  if (ev.target && ev.target.closest && ev.target.closest('#measure-panel')) return;
+  measuring.hover = measurePointFromEvent(ev);
+  drawMeasureOverlay();
+}
+function measureResult() {
+  const origin = measuring.origin;
+  const target = measuring.target || (measuring.active && measuring.hover && measuring.origin ? measuring.hover : null);
+  if (!origin || !target) return null;
+  const dx = target.x - origin.x;
+  const dy = target.y - origin.y;
+  const angle = Math.atan2(-dy, dx) * 180 / Math.PI;
+  const scale = normalizeMeasureSettings(settings.measure).scalePixelsPer10;
+  const directPx = Math.hypot(dx, dy);
+  return {
+    angle,
+    dx,
+    dy,
+    directPx,
+    scale,
+    horizontalUnits: scale ? Math.abs(dx) / scale * 10 : null,
+    directUnits: scale ? directPx / scale * 10 : null,
+  };
+}
+function updateMeasureReadout() {
+  const modeEl = $('measure-mode');
+  const readout = $('measure-readout');
+  const scaleEl = $('measure-scale');
+  if (!readout || !scaleEl || !modeEl) return;
+  modeEl.textContent = measuring.mode === 'scale' ? i18n.t('measure.mode_scale') : i18n.t('measure.mode_measure');
+  const scale = normalizeMeasureSettings(settings.measure).scalePixelsPer10;
+  scaleEl.textContent = scale
+    ? i18n.t('measure.scale_value').replace('{px}', Math.round(scale))
+    : i18n.t('measure.scale_empty');
+  if (measuring.mode === 'scale') {
+    readout.textContent = measuring.scaleStart ? i18n.t('measure.scale_wait_end') : i18n.t('measure.scale_wait_start');
+    return;
+  }
+  const result = measureResult();
+  if (!measuring.origin) {
+    readout.textContent = i18n.t('measure.wait_origin');
+  } else if (!result || !measuring.target) {
+    readout.textContent = i18n.t('measure.wait_target');
+  } else {
+    const angle = Math.round(result.angle * 10) / 10;
+    if (result.scale) {
+      readout.textContent = i18n.t('measure.result_scaled')
+        .replace('{angle}', angle)
+        .replace('{horizontal}', Math.round(result.horizontalUnits * 10) / 10)
+        .replace('{direct}', Math.round(result.directUnits * 10) / 10);
+    } else {
+      readout.textContent = i18n.t('measure.result_angle').replace('{angle}', angle);
+    }
+  }
+}
+function drawMeasurePoint(ctx, p, color, label) {
+  if (!p) return;
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = 'rgba(0,0,0,.35)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  if (label) {
+    ctx.font = '12px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,.92)';
+    ctx.fillText(label, p.x + 9, p.y - 9);
+  }
+  ctx.restore();
+}
+function drawMeasureOverlay() {
+  const canvas = measureCanvas();
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.width / dpr;
+  const h = canvas.height / dpr;
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (!measuring.active) {
+    ctx.restore();
+    return;
+  }
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(255,255,255,.18)';
+  for (let x = 0; x < w; x += 40) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+  }
+  for (let y = 0; y < h; y += 40) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+  const origin = measuring.origin;
+  const target = measuring.target || (origin ? measuring.hover : null);
+  if (origin) {
+    ctx.strokeStyle = 'rgba(255, 232, 168, .90)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.beginPath();
+    ctx.moveTo(0, origin.y);
+    ctx.lineTo(w, origin.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (origin && target) {
+    ctx.strokeStyle = 'rgba(77, 157, 186, .95)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(origin.x, origin.y);
+    ctx.lineTo(target.x, target.y);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,.42)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(target.x, origin.y);
+    ctx.lineTo(target.x, target.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (measuring.mode === 'scale') {
+    const end = measuring.scaleEnd || measuring.hover;
+    if (measuring.scaleStart && end) {
+      ctx.strokeStyle = 'rgba(111, 149, 100, .95)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(measuring.scaleStart.x, measuring.scaleStart.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+      drawMeasurePoint(ctx, measuring.scaleStart, 'rgba(111,149,100,.95)', '10');
+      drawMeasurePoint(ctx, end, 'rgba(111,149,100,.95)', '');
+    }
+  }
+  drawMeasurePoint(ctx, origin, 'rgba(255, 232, 168, .98)', 'O');
+  drawMeasurePoint(ctx, measuring.target, 'rgba(77, 157, 186, .98)', 'T');
+  ctx.restore();
+}
 function updateGameToolsButton() {
   const btn = $('game-tools-btn');
   if (!btn) return;
-  const custom = settings.showQuickNote === false || !!settings.globalMuted || !!(activeTab() && activeTab().muted);
+  const custom = settings.showQuickNote === false || !!settings.globalMuted || measuring.active || !!(activeTab() && activeTab().muted);
   btn.classList.toggle('on', custom);
   btn.textContent = i18n.t('tools.toolbar');
   btn.title = i18n.t('tools.game');
@@ -1024,6 +1362,8 @@ function showGameToolsMenu(anchor) {
   addToolAction(menu, 'tools.repair_page', resetDoctorTab, !!tab);
   addToolAction(menu, 'tools.screenshot', screenshotCurrentGame, !!tab);
   addToolAction(menu, 'tools.multi_open', showProfileOpenModal, !!tab);
+  addToolToggle(menu, 'tools.measure_overlay', measuring.active, toggleMeasureOverlay, !!tab);
+  addToolAction(menu, 'tools.measure_scale', startScaleCalibration, !!tab);
   addToolDivider(menu);
   addToolToggle(menu, 'tools.quick_note', settings.showQuickNote !== false, () => setQuickNoteVisible(settings.showQuickNote === false));
   addToolToggle(menu, 'tools.global_mute', !!settings.globalMuted, () => setGlobalMuted(!settings.globalMuted));
@@ -1227,6 +1567,219 @@ $('zoom-out-btn').addEventListener('click', () => bumpZoom(-0.1));
 $('fit-btn').addEventListener('click', fitZoom);
 window.addEventListener('resize', () => {
   for (const t of tabs) if (t.fit) t._applyZoom();
+  if (measuring.active) resizeMeasureCanvas();
+});
+
+// ---------- shortcuts ----------
+function inputFromEvent(e) {
+  return {
+    key: e.key,
+    code: e.code,
+    alt: !!e.altKey,
+    control: !!e.ctrlKey,
+    meta: !!e.metaKey,
+    shift: !!e.shiftKey,
+  };
+}
+function isEditableTarget(target) {
+  if (!target || !target.closest) return false;
+  return !!target.closest('input, textarea, select, [contenteditable="true"]');
+}
+function shortcutCodeLabel(code) {
+  if (!code) return '';
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit\d$/.test(code)) return code.slice(5);
+  const map = {
+    BracketLeft: '[',
+    BracketRight: ']',
+    Minus: '-',
+    Equal: '=',
+    Backquote: '`',
+    Slash: '/',
+    Backslash: '\\',
+    Semicolon: ';',
+    Quote: "'",
+    Comma: ',',
+    Period: '.',
+    Space: 'Space',
+    ArrowLeft: '←',
+    ArrowRight: '→',
+    ArrowUp: '↑',
+    ArrowDown: '↓',
+  };
+  return map[code] || code.replace(/^Numpad/, 'Num ');
+}
+function shortcutFromInput(input) {
+  const code = input && input.code ? input.code : '';
+  if (!code || MODIFIER_CODES.has(code)) return '';
+  const parts = [];
+  if (input.control) parts.push('Control');
+  if (input.meta) parts.push('Meta');
+  if (input.alt) parts.push('Alt');
+  if (input.shift) parts.push('Shift');
+  parts.push(code);
+  return parts.join('+');
+}
+function shortcutDisplay(shortcut) {
+  if (!shortcut) return i18n.t('shortcut.none');
+  const parts = String(shortcut).split('+').filter(Boolean);
+  const code = parts.pop();
+  const mods = parts.map(p => ({ Control: '⌃', Meta: '⌘', Alt: '⌥', Shift: '⇧' }[p] || p));
+  return mods.concat(shortcutCodeLabel(code)).join('');
+}
+function shortcutMatches(input, shortcut) {
+  if (!input || !shortcut) return false;
+  const parts = String(shortcut).split('+').filter(Boolean);
+  const code = parts.pop();
+  const mods = new Set(parts);
+  return input.code === code &&
+    !!input.control === mods.has('Control') &&
+    !!input.meta === mods.has('Meta') &&
+    !!input.alt === mods.has('Alt') &&
+    !!input.shift === mods.has('Shift');
+}
+function startShortcutCapture(type, key, index, button) {
+  clearShortcutCapture();
+  shortcutCaptureTarget = { type, key, index, button };
+  if (button) {
+    button.classList.add('recording');
+    button.textContent = i18n.t('shortcut.recording');
+  }
+}
+function clearShortcutCapture() {
+  if (shortcutCaptureTarget && shortcutCaptureTarget.button) {
+    const target = shortcutCaptureTarget;
+    shortcutCaptureTarget.button.classList.remove('recording');
+    if (target.type === 'speed-shortcut') {
+      shortcutCaptureTarget.button.textContent = shortcutDisplay(settings.speedShortcuts[target.key]);
+    } else if (target.type === 'speed-hotkey' && settings.speedHotkeys[target.index]) {
+      shortcutCaptureTarget.button.textContent = shortcutDisplay(settings.speedHotkeys[target.index].shortcut);
+    }
+  }
+  shortcutCaptureTarget = null;
+}
+async function finishShortcutCapture(shortcut) {
+  if (!shortcutCaptureTarget) return;
+  const target = shortcutCaptureTarget;
+  if (target.type === 'speed-shortcut') {
+    settings.speedShortcuts[target.key] = shortcut;
+  } else if (target.type === 'speed-hotkey' && settings.speedHotkeys[target.index]) {
+    settings.speedHotkeys[target.index].shortcut = shortcut;
+  }
+  clearShortcutCapture();
+  await saveSettings();
+  renderSpeedToolSettings();
+}
+function shortcutInputLabel(input) {
+  return shortcutDisplay(shortcutFromInput(input));
+}
+function currentSpeedPresetIndex() {
+  const presets = normalizeSpeedPresets(settings.speedPresets);
+  let best = 0;
+  let bestDelta = Infinity;
+  for (let i = 0; i < presets.length; i++) {
+    const delta = Math.abs(presets[i] - (speedFactor || 1));
+    if (delta < bestDelta) {
+      best = i;
+      bestDelta = delta;
+    }
+  }
+  return best;
+}
+function cycleSpeedPreset(direction) {
+  const presets = normalizeSpeedPresets(settings.speedPresets);
+  if (!presets.length) return;
+  const current = speedFactor || 1;
+  let index = currentSpeedPresetIndex();
+  const exact = Math.abs(presets[index] - current) < 0.01;
+  if (!exact) {
+    if (direction > 0) {
+      index = presets.findIndex(p => p > current);
+      if (index === -1) index = 0;
+    } else {
+      index = presets.length - 1;
+      for (let i = presets.length - 1; i >= 0; i--) {
+        if (presets[i] < current) { index = i; break; }
+      }
+    }
+  } else {
+    index = (index + direction + presets.length) % presets.length;
+  }
+  setSpeedFactor(presets[index]);
+}
+async function addSpeedPreset(value) {
+  const n = clampSpeedPreset(value);
+  if (n == null) return false;
+  const presets = normalizeSpeedPresets(settings.speedPresets);
+  if (!presets.some(p => Math.abs(p - n) < 0.01)) presets.push(n);
+  settings.speedPresets = normalizeSpeedPresets(presets);
+  await saveSettings();
+  renderSpeedToolSettings();
+  return true;
+}
+async function removeSpeedPreset(value) {
+  const n = clampSpeedPreset(value);
+  const presets = normalizeSpeedPresets(settings.speedPresets).filter(p => Math.abs(p - n) >= 0.01);
+  settings.speedPresets = presets.length ? presets : [1];
+  await saveSettings();
+  renderSpeedToolSettings();
+}
+async function resetSpeedPresets() {
+  settings.speedPresets = DEFAULT_SPEED_PRESETS.slice();
+  await saveSettings();
+  renderSpeedToolSettings();
+}
+function handleShortcutInput(input, target) {
+  if (shortcutCaptureTarget) {
+    if (input.code === 'Escape') {
+      clearShortcutCapture();
+      renderSpeedToolSettings();
+      return true;
+    }
+    if (input.code === 'Backspace' || input.code === 'Delete') {
+      finishShortcutCapture('');
+      return true;
+    }
+    const shortcut = shortcutFromInput(input);
+    if (shortcut) finishShortcutCapture(shortcut);
+    return !!shortcut;
+  }
+  if (isEditableTarget(target) && !input.alt && !input.meta && !input.control) return false;
+  settings.speedShortcuts = normalizeSpeedShortcuts(settings.speedShortcuts);
+  settings.speedHotkeys = normalizeSpeedHotkeys(settings.speedHotkeys);
+  if (shortcutMatches(input, settings.speedShortcuts.prev)) {
+    cycleSpeedPreset(-1);
+    return true;
+  }
+  if (shortcutMatches(input, settings.speedShortcuts.next)) {
+    cycleSpeedPreset(1);
+    return true;
+  }
+  if (shortcutMatches(input, settings.speedShortcuts.reset)) {
+    setSpeedFactor(1);
+    return true;
+  }
+  if (shortcutMatches(input, settings.speedShortcuts.measure)) {
+    toggleMeasureOverlay();
+    return true;
+  }
+  for (const hotkey of settings.speedHotkeys) {
+    if (shortcutMatches(input, hotkey.shortcut)) {
+      setSpeedFactor(hotkey.factor);
+      return true;
+    }
+  }
+  return false;
+}
+window.addEventListener('keydown', (e) => {
+  const handled = handleShortcutInput(inputFromEvent(e), e.target);
+  if (handled) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+}, true);
+ipcRenderer.on('shortcut:input', (_e, input) => {
+  handleShortcutInput(input || {}, null);
 });
 
 // ---------- Flash speed ----------
@@ -1243,15 +1796,18 @@ function updateSpeedIndicator() {
   el.title = speedHookEnabled ? (rounded === 1 ? i18n.t('speed.normal') : i18n.t('speed.tip')) : i18n.t('speed.disabled_hint');
 }
 async function setSpeedFactor(factor) {
-  const next = await ipcRenderer.invoke('speed:set', factor, speedProfileCode());
+  const requested = clampSpeedPreset(factor) || 1;
+  const next = await ipcRenderer.invoke('speed:set', requested, speedProfileCode());
   speedFactor = next || 1;
   updateSpeedIndicator();
+  if (currentRoute === 'settings') renderSpeedToolSettings();
+  if (currentRoute === 'doctor') renderDoctor();
 }
 function showSpeedMenu(anchor) {
   closeAnyMenus();
   const rect = anchor.getBoundingClientRect();
   const menu = document.createElement('div');
-  menu.className = 'menu';
+  menu.className = 'menu speed-menu';
   menu.style.top = (rect.bottom + 4) + 'px';
   menu.style.left = (rect.right - 260) + 'px';
   menu.style.minWidth = '250px';
@@ -1279,9 +1835,14 @@ function showSpeedMenu(anchor) {
   modeTitle.style.cssText = 'padding: 8px 10px 4px; color: var(--text-secondary); font-size: 11px;';
   modeTitle.textContent = i18n.t('speed.current_mode');
   menu.appendChild(modeTitle);
-  for (const profile of SPEED_PROFILES) {
+  const currentProfile = settings.speedProfile || 'native-ddt';
+  const profileMenu = SPEED_PROFILES.filter(p => SPEED_PROFILE_MENU_KEYS.includes(p.key));
+  if (!profileMenu.some(p => p.key === currentProfile) && SPEED_PROFILE_BY_KEY[currentProfile]) {
+    profileMenu.unshift(SPEED_PROFILE_BY_KEY[currentProfile]);
+  }
+  for (const profile of profileMenu) {
     const item = document.createElement('div');
-    item.className = 'menu-item' + ((settings.speedProfile || 'native-ddt') === profile.key ? ' check' : '');
+    item.className = 'menu-item' + (currentProfile === profile.key ? ' check' : '');
     item.textContent = i18n.t(profile.labelKey);
     item.addEventListener('click', async (ev) => {
       ev.stopPropagation();
@@ -1296,11 +1857,11 @@ function showSpeedMenu(anchor) {
   const modeDiv = document.createElement('div');
   modeDiv.style.cssText = 'border-top: 1px solid var(--border); margin: 4px 6px;';
   menu.appendChild(modeDiv);
-  const presets = [0.8, 1, 1.1, 1.25, 1.5, 2, 3];
+  const presets = normalizeSpeedPresets(settings.speedPresets);
   for (const p of presets) {
     const item = document.createElement('div');
     item.className = 'menu-item' + (Math.abs((speedFactor || 1) - p) < 0.01 ? ' check' : '');
-    item.textContent = p + 'x';
+    item.innerHTML = '<span>' + p + 'x</span><span class="hint">' + shortcutForSpeedPreset(p) + '</span>';
     item.addEventListener('click', (ev) => { ev.stopPropagation(); setSpeedFactor(p); closeAnyMenus(); });
     menu.appendChild(item);
   }
@@ -1310,16 +1871,33 @@ function showSpeedMenu(anchor) {
   const customItem = document.createElement('div');
   customItem.className = 'menu-item';
   customItem.textContent = i18n.t('speed.custom');
-  customItem.addEventListener('click', (ev) => {
+  customItem.addEventListener('click', async (ev) => {
     ev.stopPropagation();
     const inp = prompt(i18n.t('speed.custom_prompt'), String(speedFactor || 1));
     closeAnyMenus();
     if (inp == null) return;
-    const n = parseFloat(inp);
-    if (isNaN(n) || n < 0.5 || n > 10) return;
-    setSpeedFactor(n);
+    const n = clampSpeedPreset(inp);
+    if (n == null) return;
+    await setSpeedFactor(n);
+    const exists = normalizeSpeedPresets(settings.speedPresets).some(p => Math.abs(p - n) < 0.01);
+    if (!exists && confirm(i18n.t('speed.add_custom_confirm').replace('{factor}', n))) {
+      await addSpeedPreset(n);
+    }
   });
   menu.appendChild(customItem);
+  const manageItem = document.createElement('div');
+  manageItem.className = 'menu-item';
+  manageItem.textContent = i18n.t('speed.manage_presets');
+  manageItem.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    closeAnyMenus();
+    setRoute('settings');
+    setTimeout(() => {
+      const el = $('speed-tools-group');
+      if (el) el.scrollIntoView({ block: 'start' });
+    }, 0);
+  });
+  menu.appendChild(manageItem);
   const hint = document.createElement('div');
   hint.style.cssText = 'max-width: 220px; padding: 8px 10px; color: var(--text-secondary); font-size: 11px; line-height: 1.4;';
   hint.textContent = i18n.t('speed.safe_hint');
@@ -1338,6 +1916,10 @@ function showSpeedMenu(anchor) {
   }).catch(() => {});
   document.body.appendChild(menu);
   armMenuClose();
+}
+function shortcutForSpeedPreset(factor) {
+  const hit = normalizeSpeedHotkeys(settings.speedHotkeys).find(h => Math.abs(h.factor - factor) < 0.01 && h.shortcut);
+  return hit ? shortcutDisplay(hit.shortcut) : '';
 }
 $('speed-indicator').addEventListener('click', (ev) => { ev.stopPropagation(); showSpeedMenu(ev.currentTarget); });
 ipcRenderer.on('speed:changed', (_e, factor) => {
@@ -2242,6 +2824,103 @@ function removeEdgeBackground(ctx, width, height, tolerance, rect) {
   for (const pos of queue) data[pos * 4 + 3] = 0;
   ctx.putImageData(img, 0, 0);
 }
+function makeShortcutCaptureButton(type, key, index, shortcut) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'shortcut-capture';
+  btn.textContent = shortcutDisplay(shortcut);
+  btn.addEventListener('click', () => startShortcutCapture(type, key, index, btn));
+  return btn;
+}
+function renderSpeedShortcutRows() {
+  const root = $('speed-shortcut-list');
+  if (!root) return;
+  settings.speedShortcuts = normalizeSpeedShortcuts(settings.speedShortcuts);
+  root.innerHTML = '';
+  const rows = [
+    ['prev', 'shortcut.speed_prev'],
+    ['next', 'shortcut.speed_next'],
+    ['reset', 'shortcut.speed_reset'],
+    ['measure', 'shortcut.measure_toggle'],
+  ];
+  for (const [key, labelKey] of rows) {
+    const row = document.createElement('div');
+    row.className = 'shortcut-row';
+    row.innerHTML = '<div><div class="label">' + escapeHtml(i18n.t(labelKey)) + '</div></div>';
+    row.appendChild(makeShortcutCaptureButton('speed-shortcut', key, null, settings.speedShortcuts[key]));
+    root.appendChild(row);
+  }
+}
+function renderSpeedHotkeyRows() {
+  const root = $('speed-hotkey-list');
+  if (!root) return;
+  settings.speedHotkeys = normalizeSpeedHotkeys(settings.speedHotkeys);
+  root.innerHTML = '';
+  settings.speedHotkeys.forEach((hotkey, index) => {
+    const row = document.createElement('div');
+    row.className = 'shortcut-row speed-hotkey-row';
+    const label = document.createElement('div');
+    label.innerHTML = '<div class="label">' + escapeHtml(i18n.t('shortcut.speed_slot').replace('{n}', index + 1)) + '</div>';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0.5';
+    input.max = '10';
+    input.step = '0.25';
+    input.value = String(hotkey.factor);
+    input.addEventListener('change', async () => {
+      const n = clampSpeedPreset(input.value);
+      if (n == null) {
+        input.value = String(hotkey.factor);
+        return;
+      }
+      settings.speedHotkeys[index].factor = n;
+      await saveSettings();
+      renderSpeedToolSettings();
+    });
+    const action = document.createElement('div');
+    action.className = 'shortcut-action';
+    action.appendChild(input);
+    action.appendChild(makeShortcutCaptureButton('speed-hotkey', null, index, hotkey.shortcut));
+    row.appendChild(label);
+    row.appendChild(action);
+    root.appendChild(row);
+  });
+}
+function renderSpeedPresets() {
+  const root = $('speed-preset-list');
+  if (!root) return;
+  settings.speedPresets = normalizeSpeedPresets(settings.speedPresets);
+  root.innerHTML = '';
+  for (const preset of settings.speedPresets) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'speed-preset-chip' + (Math.abs((speedFactor || 1) - preset) < 0.01 ? ' active' : '');
+    chip.innerHTML = '<span>' + preset + 'x</span><span class="remove">×</span>';
+    chip.addEventListener('click', (ev) => {
+      if (ev.target && ev.target.classList.contains('remove')) return;
+      setSpeedFactor(preset);
+    });
+    chip.querySelector('.remove').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      removeSpeedPreset(preset);
+    });
+    root.appendChild(chip);
+  }
+}
+function renderMeasureSettings() {
+  const el = $('measure-scale-setting');
+  if (!el) return;
+  const scale = normalizeMeasureSettings(settings.measure).scalePixelsPer10;
+  el.textContent = scale
+    ? i18n.t('measure.scale_value').replace('{px}', Math.round(scale))
+    : i18n.t('measure.scale_empty');
+}
+function renderSpeedToolSettings() {
+  renderSpeedPresets();
+  renderSpeedShortcutRows();
+  renderSpeedHotkeyRows();
+  renderMeasureSettings();
+}
 function renderSettings() {
   // Identity inputs
   const id = settings.identity || {};
@@ -2272,6 +2951,7 @@ function renderSettings() {
   renderAppearanceSummary();
   renderThemeGrid();
   renderCustomThemeEditor();
+  renderSpeedToolSettings();
   // Passwords list
   renderPasswords();
 }
@@ -2323,6 +3003,18 @@ attachSwitch($('setting-sidebar-collapsed'), async (v) => { settings.sidebarColl
 attachSwitch($('setting-show-quick-note'), async (v) => {
   await setQuickNoteVisible(v);
 });
+$('setting-speed-preset-add').addEventListener('click', async () => {
+  const input = $('setting-speed-preset-input');
+  const ok = await addSpeedPreset(input.value);
+  if (ok) input.value = '';
+});
+$('setting-speed-preset-input').addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter') return;
+  const ok = await addSpeedPreset(e.target.value);
+  if (ok) e.target.value = '';
+});
+$('setting-speed-presets-reset').addEventListener('click', resetSpeedPresets);
+$('measure-scale-clear').addEventListener('click', clearMeasureScale);
 $('setting-clear-history').addEventListener('click', async () => {
   history = []; await saveHistory();
   alert(i18n.t('set.data_cleared'));
@@ -2651,6 +3343,12 @@ $('profile-open-select-none').addEventListener('click', () => setProfileOpenChec
 $('profile-open-cancel').addEventListener('click', hideProfileOpenModal);
 $('profile-open-run').addEventListener('click', () => runProfileOpen(false));
 $('profile-open-grid').addEventListener('click', () => runProfileOpen(true));
+$('measure-canvas').addEventListener('click', handleMeasureClick);
+$('measure-canvas').addEventListener('mousemove', handleMeasureMove);
+$('measure-close').addEventListener('click', () => setMeasureActive(false));
+$('measure-reset').addEventListener('click', resetMeasurePoints);
+$('measure-scale-start').addEventListener('click', startScaleCalibration);
+$('measure-scale-clear-inline').addEventListener('click', clearMeasureScale);
 $('quick-note-fab').addEventListener('click', openQuickNote);
 $('qn-close').addEventListener('click', () => $('quick-note-popover').classList.remove('visible'));
 $('qn-save').addEventListener('click', async () => {
