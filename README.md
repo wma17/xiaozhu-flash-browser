@@ -32,10 +32,13 @@
 - `app/xzspeed.c`：macOS 原生时间/调度 hook 源码，配合 PPAPI 代理使用。
 - `scripts/sync-to-app.sh`：把 `app/` 同步到本机应用包并重新签名。
 - `scripts/build-speed-shim.sh`：构建 `PepperFlashPlayerSpeed.plugin`。
-- `scripts/build-dmg.sh`：从本机 `.app` 生成 `dist/` 下的 DMG 和 SHA256。
+- `scripts/build-dmg.sh`：从本机 `.app` 一次打出传播版和原生版两套 DMG / ZIP / SHA256，产物在 `dist/`。
+- `scripts/strip-aim.sh`：按源码里的 XZ-AIM 标记，把竞技辅助与测距从一份副本里机械删掉。
+- `scripts/publish-release.sh`：把传播版发到 GitHub Release；文件名带 `-aim` 的会被硬性拒绝。
 - `docs/theme-system.md`：主题 ID、主题 token 和后续主题资产接入说明。
 - `docs/speed-research.md`：变速研究记录、失败现象和后续方向。
 - `docs/focus-mode.md`：焦点模式的几何模型、布局规则和 1.6.1 各模块的职责。
+- `docs/release-notes-1.6.1.md`：1.6.1 的发布说明正文，`publish-release.sh` 直接拿它当 Release 正文。
 
 ## 本机开发
 
@@ -54,14 +57,31 @@ open -n /Applications/小竹Flash浏览器.app --args --xz-no-speed-mode
 ## 打包
 
 ```bash
-scripts/sync-to-app.sh
-scripts/build-dmg.sh
+scripts/sync-to-app.sh      # 仓库 app/ → /Applications 里的 app
+scripts/build-dmg.sh        # 一次打出两个版本，产物在 dist/
+scripts/publish-release.sh  # 只把传播版发到 GitHub Release
 ```
 
-生成文件示例：
+一次打出两套：
 
-- `dist/XiaozhuFlashBrowser-macOS-v1.6.1.dmg`
-- `dist/XiaozhuFlashBrowser-macOS-v1.6.1.dmg.sha256`
+- 传播版（对外发布）
+  - `dist/XiaozhuFlashBrowser-macOS-v1.6.1.dmg`
+  - `dist/XiaozhuFlashBrowser-macOS-v1.6.1.zip`
+  - 两个文件各自的 `.sha256`
+- 原生版（自己用，功能齐全，文件名带 `-aim`）
+  - `dist/XiaozhuFlashBrowser-macOS-v1.6.1-aim.dmg`
+  - `dist/XiaozhuFlashBrowser-macOS-v1.6.1-aim.zip`
+  - 两个文件各自的 `.sha256`
+
+发布出去的那一版不含竞技辅助，也不含测距叠层。
+
+只打其中一个：`scripts/build-dmg.sh dist` 或 `scripts/build-dmg.sh aim`。
+
+传播版的裁剪不是手工做的。源码里只属于竞技辅助与测距的片段都用注释标了出来 ——
+整段用 `XZ-AIM-BEGIN` / `XZ-AIM-END`，单行用 `XZ-AIM-LINE`，一行里的一小截用
+`XZ-AIM-CUT` / `XZ-AIM-CUT-END` —— `scripts/strip-aim.sh` 按这些标记删除，删完还会
+自检一遍有没有残留的入口。标记本身是注释，对全量版没有任何运行时影响，具体写法见
+`scripts/strip-aim.sh` 开头。
 
 `dist/` 不进入 Git 仓库，发布包请上传到 GitHub Release。
 

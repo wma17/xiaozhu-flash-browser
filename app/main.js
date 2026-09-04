@@ -209,7 +209,7 @@ app.commandLine.appendSwitch('ppapi-flash-path', pluginPath);
 app.commandLine.appendSwitch('ppapi-flash-version', pluginVersion);
 
 // --- JSON persistence ---
-const STORE_NAMES = ['history', 'bookmarks', 'settings', 'profiles', 'passwords', 'pw_skipped_sites', 'notes', 'tasks', 'layouts', 'aim-assist'];
+const STORE_NAMES = ['history', 'bookmarks', 'settings', 'profiles', 'passwords', 'pw_skipped_sites', 'notes', 'tasks', 'layouts'/*XZ-AIM-CUT*/, 'aim-assist'/*XZ-AIM-CUT-END*/];
 function storePath(name) { return path.join(app.getPath('userData'), name + '.json'); }
 function readJson(name, fallback) {
   try { return JSON.parse(fs.readFileSync(storePath(name), 'utf8')); }
@@ -1230,6 +1230,7 @@ ipcMain.handle('report:capture-png', async (e, rect) => {
     return { ok: false, error: String((err && err.message) || err) };
   }
 });
+// XZ-AIM-BEGIN
 // Aim assist: labelled wind-indicator crops, for building the digit recogniser.
 // Written to their own Desktop folder rather than mixed in with screenshots, and
 // deliberately dumb — the renderer decides what is worth keeping and what to name it.
@@ -1323,6 +1324,7 @@ ipcMain.on('aim:rpc-result', (_e, id, ok, payload) => {
   if (ok) p.resolve(payload); else p.reject(new Error(String(payload)));
 });
 
+// XZ-AIM-END
 ipcMain.handle('speed:get', () => readSpeedFactor());
 ipcMain.handle('speed:state', () => readSpeedState());
 ipcMain.handle('speed:diag-path', () => SPEED_DIAG_FILE);

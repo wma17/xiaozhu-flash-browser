@@ -114,6 +114,7 @@
 }
 
 
+/* XZ-AIM-BEGIN */
 /* ===== 2. 竞技辅助面板（aim-assist.js 926–992 注入的样式） ================
    §1.6-1 记录的问题：那段样式引用了四个变量，其中三个（--text / --accent /
    --field-bg）在本 document 里根本不存在（只在独立的 aim-window.html 里
@@ -183,6 +184,7 @@ body #aim-cal .aim-cal-tip {
   -webkit-backdrop-filter: none;   /* 替换 saturate(180%) blur(20px) */
   backdrop-filter: none;           /* 同上；两种拼写都要写，Chromium 87 认前者 */
 }
+/* XZ-AIM-END */
 
 
 /* ===== 4. 三个内联样式面板与散落的 8px 控件 ==============================

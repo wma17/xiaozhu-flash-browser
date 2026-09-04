@@ -580,6 +580,7 @@
       function () { return fire(function () { return setSidebar(!bodyHas('sidebar-collapsed')); }); },
       { checked: function () { return !bodyHas('sidebar-collapsed'); } });
 
+    // XZ-AIM-BEGIN
     add('act_measure', 'palette.act_measure', '测距浮层',
       ['measure', '测距', '距离', 'ruler'],
       function () { return fire(function () { return toggleMeasureOverlay(); }); },
@@ -595,6 +596,7 @@
           focusMode: 'none' });
     }
 
+    // XZ-AIM-END
     add('act_zoom_fit', 'palette.act_zoom_fit', '适应窗口',
       ['fit', '适应窗口', '缩放', 'zoom'],
       function () { return fire(function () { return fitZoom(); }); },

@@ -1339,6 +1339,7 @@
     }
     webview { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
     webview.active { display: flex; }
+    /* XZ-AIM-BEGIN */
     #measure-overlay {
       position: absolute; left: 0; right: 0; bottom: 0; top: 0;
       z-index: 25;
@@ -1420,6 +1421,7 @@
       border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
     }
+    /* XZ-AIM-END */
     #compat-banner {
       position: absolute; left: 10px; right: 10px; top: 10px; z-index: 20;
       display: none; align-items: center; gap: var(--s-3);
@@ -2956,8 +2958,8 @@
        Anything the user compares down a column gets tabular figures, so the
        digits stop dancing as values change. */
     .rep-stat-num, .rep-row-val, .rep-tick, .zoom-ind, .speed-ind,
-    .kbd-hint, .t-due, .pc-rank, .count, .n-date, .ver,
-    .measure-readout, .measure-scale {
+    .kbd-hint, .t-due, .pc-rank, .count, .n-date, .ver/*XZ-AIM-CUT*/,
+    .measure-readout, .measure-scale/*XZ-AIM-CUT-END*/ {
       font-variant-numeric: tabular-nums;
     }
 
@@ -3402,6 +3404,7 @@
               </div>
               <div class="shortcut-list" id="speed-hotkey-list"></div>
             </div>
+            <!-- XZ-AIM-BEGIN -->
             <div class="settings-row">
               <div>
                 <div class="label" data-i18n="measure.scale_title"></div>
@@ -3412,6 +3415,7 @@
                 <button id="measure-scale-clear" data-i18n="measure.scale_clear"></button>
               </div>
             </div>
+            <!-- XZ-AIM-END -->
           </div>
 
           <div class="settings-group">
@@ -3545,6 +3549,7 @@
             <div id="focus-shield"></div>
           </div>
         </div>
+        <!-- XZ-AIM-BEGIN -->
         <div id="measure-overlay">
           <canvas id="measure-canvas"></canvas>
           <div id="measure-panel">
@@ -3562,6 +3567,7 @@
             </div>
           </div>
         </div>
+        <!-- XZ-AIM-END -->
       </div>
     </div>
   </div>
@@ -3695,7 +3701,7 @@
   </div>
 </div>
 <script src="renderer.js"></script>
-<script src="aim-assist.js"></script>
+<script src="aim-assist.js"></script> <!-- XZ-AIM-LINE -->
 <script src="focus-mode.js"></script>
 <!-- 第三轮模块：每个都是独立文件，缺席时 renderer 的 if (window.XZThing) 钩子自动短路。
      顺序 = 被依赖的先加载：缩放/净化/登录 → 状态条 → 会话 → 命令面板（枚举其它模块）→ 引导。 -->

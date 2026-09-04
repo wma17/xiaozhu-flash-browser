@@ -29,9 +29,9 @@ const DEFAULT_SPEED_SHORTCUTS = {
   prev: 'Alt+BracketLeft',
   next: 'Alt+BracketRight',
   reset: 'Alt+Digit0',
-  measure: 'Alt+KeyM',
+  measure: 'Alt+KeyM', // XZ-AIM-LINE
   screenshot: 'Alt+KeyS',
-  aim: 'Alt+KeyA',
+  aim: 'Alt+KeyA', // XZ-AIM-LINE
 };
 const DEFAULT_SPEED_HOTKEYS = [
   { factor: 1, shortcut: 'Alt+Digit1' },
@@ -39,9 +39,11 @@ const DEFAULT_SPEED_HOTKEYS = [
   { factor: 3, shortcut: 'Alt+Digit3' },
   { factor: 5, shortcut: 'Alt+Digit4' },
 ];
+// XZ-AIM-BEGIN
 const DEFAULT_MEASURE = {
   scalePixelsPer10: null,
 };
+// XZ-AIM-END
 let settings = {
   language: 'zh-CN',
   defaultProfileId: 'main',
@@ -52,7 +54,7 @@ let settings = {
   speedPresets: DEFAULT_SPEED_PRESETS.slice(),
   speedShortcuts: Object.assign({}, DEFAULT_SPEED_SHORTCUTS),
   speedHotkeys: DEFAULT_SPEED_HOTKEYS.map(h => Object.assign({}, h)),
-  measure: Object.assign({}, DEFAULT_MEASURE),
+  measure: Object.assign({}, DEFAULT_MEASURE), // XZ-AIM-LINE
   theme: 'xiaozhu-native',
   showQuickNote: true,
   globalMuted: false,
@@ -77,6 +79,7 @@ let runningProfileIds = new Set(); // profiles that currently have a window open
 const touchedProfileIds = new Set(); // profiles this window already counted as "opened"
 let menuCloseHandler = null;
 let shortcutCaptureTarget = null;
+// XZ-AIM-BEGIN
 let measuring = {
   active: false,
   mode: 'measure',
@@ -86,6 +89,7 @@ let measuring = {
   scaleEnd: null,
   hover: null,
 };
+// XZ-AIM-END
 const preloadPath = 'file://' + document.location.pathname.split('/').slice(0, -1).join('/') + '/webview-preload.js';
 const HISTORY_LIMIT = 2000;
 const HISTORY_REPEAT_WRITE_MS = 30000;
@@ -320,11 +324,13 @@ async function loadStores() {
     settings.speedHotkeys = normalizedSpeedHotkeys;
     settingsChanged = true;
   }
+  // XZ-AIM-BEGIN
   const normalizedMeasure = normalizeMeasureSettings(settings.measure);
   if (JSON.stringify(normalizedMeasure) !== JSON.stringify(settings.measure || null)) {
     settings.measure = normalizedMeasure;
     settingsChanged = true;
   }
+  // XZ-AIM-END
   if (settingsChanged) await ipcRenderer.invoke('store:set', 'settings', settings);
   [speedFactor, speedHookEnabled] = await Promise.all([
     ipcRenderer.invoke('speed:get'),
@@ -596,6 +602,7 @@ function normalizeSpeedHotkeys(value) {
   }
   return out.slice(0, 6);
 }
+// XZ-AIM-BEGIN
 function normalizeMeasureSettings(value) {
   const source = value && typeof value === 'object' ? value : {};
   const scale = Number(source.scalePixelsPer10);
@@ -603,6 +610,7 @@ function normalizeMeasureSettings(value) {
     scalePixelsPer10: Number.isFinite(scale) && scale > 0 ? scale : null,
   };
 }
+// XZ-AIM-END
 function normalizeCustomTheme(value) {
   const source = value && typeof value === 'object' ? value : {};
   const colors = Object.assign({}, DEFAULT_CUSTOM_THEME.colors, source.colors || {});
@@ -931,7 +939,7 @@ function setRoute(name) {
   else if (name === 'notes') renderNotes();
   else if (name === 'tasks') renderTasks();
   else if (name === 'library') renderLibrary();
-  if (name === 'browser' && measuring.active) setTimeout(resizeMeasureCanvas, 0);
+  if (name === 'browser' && measuring.active) setTimeout(resizeMeasureCanvas, 0); // XZ-AIM-LINE
   document.dispatchEvent(new CustomEvent('xz:route', { detail: name }));
 }
 
@@ -978,7 +986,7 @@ function setGameMode(on) {
   document.body.classList.toggle('game-mode', !!on);
   const btn = $('game-mode-btn');
   if (btn) btn.textContent = on ? '↙' : '⛶';
-  if (measuring.active) setTimeout(resizeMeasureCanvas, 0);
+  if (measuring.active) setTimeout(resizeMeasureCanvas, 0); // XZ-AIM-LINE
 }
 $('game-mode-btn').addEventListener('click', () => setGameMode(!document.body.classList.contains('game-mode')));
 window.addEventListener('keydown', (e) => {
@@ -1599,6 +1607,7 @@ function openCompatExternal() {
 function openFlashpoint() {
   ipcRenderer.invoke('external:open', FLASHPOINT_URL);
 }
+// XZ-AIM-BEGIN
 function measureCanvas() { return $('measure-canvas'); }
 function measureOverlay() { return $('measure-overlay'); }
 function measurePointFromEvent(ev) {
@@ -1836,10 +1845,11 @@ function drawMeasureOverlay() {
   drawMeasurePoint(ctx, measuring.target, 'rgba(77, 157, 186, .98)', 'T');
   ctx.restore();
 }
+// XZ-AIM-END
 function updateGameToolsButton() {
   const btn = $('game-tools-btn');
   if (!btn) return;
-  const custom = settings.showQuickNote === false || !!settings.globalMuted || measuring.active || !!(activeTab() && activeTab().muted);
+  const custom = settings.showQuickNote === false || !!settings.globalMuted || /*XZ-AIM-CUT*/measuring.active || /*XZ-AIM-CUT-END*/!!(activeTab() && activeTab().muted);
   btn.classList.toggle('on', custom);
   btn.textContent = i18n.t('tools.toolbar');
   btn.title = i18n.t('tools.game');
@@ -2006,11 +2016,13 @@ function showGameToolsMenu(anchor) {
   if (window.XZPalette) addToolAction(menu, 'tools.palette', () => XZPalette.open());
   if (window.XZStatus) addToolToggle(menu, 'tools.status_bar', XZStatus.isVisible(), () => XZStatus.toggle());
   if (window.XZCleanup) XZCleanup.addMenuItem(menu, tab, addToolAction);
+  // XZ-AIM-BEGIN
   addToolToggle(menu, 'tools.measure_overlay', measuring.active, toggleMeasureOverlay, !!tab);
   addToolAction(menu, 'tools.measure_scale', startScaleCalibration, !!tab);
   addToolToggle(menu, 'tools.aim_assist',
     !!(window.AimAssist && window.AimAssist.isVisible()),
     () => { if (window.AimAssist) window.AimAssist.toggle(); }, !!tab);
+  // XZ-AIM-END
   addToolDivider(menu);
   addToolToggle(menu, 'tools.quick_note', settings.showQuickNote !== false, () => setQuickNoteVisible(settings.showQuickNote === false));
   addToolToggle(menu, 'tools.global_mute', !!settings.globalMuted, () => setGlobalMuted(!settings.globalMuted));
@@ -2574,7 +2586,7 @@ $('zoom-out-btn').addEventListener('click', () => bumpZoom(-0.1));
 $('fit-btn').addEventListener('click', fitZoom);
 window.addEventListener('resize', () => {
   for (const t of tabs) if (t.fit) t._applyZoom();
-  if (measuring.active) resizeMeasureCanvas();
+  if (measuring.active) resizeMeasureCanvas(); // XZ-AIM-LINE
 });
 
 // ---------- shortcuts ----------
@@ -2766,18 +2778,22 @@ function handleShortcutInput(input, target) {
     setSpeedFactor(1);
     return true;
   }
+  // XZ-AIM-BEGIN
   if (shortcutMatches(input, settings.speedShortcuts.measure)) {
     toggleMeasureOverlay();
     return true;
   }
+  // XZ-AIM-END
   if (shortcutMatches(input, settings.speedShortcuts.screenshot)) {
     screenshotCurrentGame();
     return true;
   }
+  // XZ-AIM-BEGIN
   if (shortcutMatches(input, settings.speedShortcuts.aim)) {
     if (window.AimAssist) window.AimAssist.toggle();
     return true;
   }
+  // XZ-AIM-END
   for (const hotkey of settings.speedHotkeys) {
     if (shortcutMatches(input, hotkey.shortcut)) {
       setSpeedFactor(hotkey.factor);
@@ -4061,9 +4077,9 @@ function renderSpeedShortcutRows() {
     ['prev', 'shortcut.speed_prev'],
     ['next', 'shortcut.speed_next'],
     ['reset', 'shortcut.speed_reset'],
-    ['measure', 'shortcut.measure_toggle'],
+    ['measure', 'shortcut.measure_toggle'], // XZ-AIM-LINE
     ['screenshot', 'shortcut.screenshot'],
-    ['aim', 'shortcut.aim'],
+    ['aim', 'shortcut.aim'], // XZ-AIM-LINE
   ];
   for (const [key, labelKey] of rows) {
     const row = document.createElement('div');
@@ -4129,6 +4145,7 @@ function renderSpeedPresets() {
     root.appendChild(chip);
   }
 }
+// XZ-AIM-BEGIN
 function renderMeasureSettings() {
   const el = $('measure-scale-setting');
   if (!el) return;
@@ -4137,11 +4154,12 @@ function renderMeasureSettings() {
     ? i18n.t('measure.scale_value').replace('{px}', Math.round(scale))
     : i18n.t('measure.scale_empty');
 }
+// XZ-AIM-END
 function renderSpeedToolSettings() {
   renderSpeedPresets();
   renderSpeedShortcutRows();
   renderSpeedHotkeyRows();
-  renderMeasureSettings();
+  renderMeasureSettings(); // XZ-AIM-LINE
 }
 // The fixed-address box only means anything in 'custom' mode. Disable and dim it in the
 // other two rather than hiding the row, so the settings page does not jump around.
@@ -4263,7 +4281,7 @@ $('setting-speed-preset-input').addEventListener('keydown', async (e) => {
   if (ok) e.target.value = '';
 });
 $('setting-speed-presets-reset').addEventListener('click', resetSpeedPresets);
-$('measure-scale-clear').addEventListener('click', clearMeasureScale);
+$('measure-scale-clear').addEventListener('click', clearMeasureScale); // XZ-AIM-LINE
 $('setting-clear-history').addEventListener('click', async () => {
   history = []; await saveHistory();
   alert(i18n.t('set.data_cleared'));
@@ -5171,12 +5189,14 @@ $('profile-open-select-none').addEventListener('click', () => setProfileOpenChec
 $('profile-open-cancel').addEventListener('click', hideProfileOpenModal);
 $('profile-open-run').addEventListener('click', () => runProfileOpen(false));
 $('profile-open-grid').addEventListener('click', () => runProfileOpen(true));
+// XZ-AIM-BEGIN
 $('measure-canvas').addEventListener('click', handleMeasureClick);
 $('measure-canvas').addEventListener('mousemove', handleMeasureMove);
 $('measure-close').addEventListener('click', () => setMeasureActive(false));
 $('measure-reset').addEventListener('click', resetMeasurePoints);
 $('measure-scale-start').addEventListener('click', startScaleCalibration);
 $('measure-scale-clear-inline').addEventListener('click', clearMeasureScale);
+// XZ-AIM-END
 $('quick-note-fab').addEventListener('click', openQuickNote);
 $('qn-close').addEventListener('click', () => $('quick-note-popover').classList.remove('visible'));
 $('qn-save').addEventListener('click', async () => {
