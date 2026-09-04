@@ -1,0 +1,655 @@
+/* ============================================================================
+   焦点模式 (Focus Mode, "1+n") — 视觉层 / WP3
+   ----------------------------------------------------------------------------
+   契约见 xz-focus-plan.md §3.6。这里只画"边框"，从不画"内容":
+   条带里的每一张缩略图都是一个还在跑的 <webview>，它就在这些 div 的下面，
+   所以每一个覆盖元素的中心必须是完全透明的，只在边缘落笔。
+
+   三条硬规矩，改这个文件的人先读:
+
+   1. 没有 backdrop-filter，也没有 filter。 index.html 66–80 / 2748–2760 /
+      2867–2876 已经写清楚了: backdrop-filter 画在 <webview> 上方会静默失效
+      (插件的像素不在本 document 的 backdrop 里)，而把 webview 拖进 backdrop
+      root 会让 Retina 上的游戏变软。焦点模式全程 body.in-browser，所以本表
+      也不写 animation —— 那条门控规则 (index.html 2846–2862) 本来就会把它
+      关掉，而且游戏在屏幕上时不该有任何一帧动画在跑。缩略图上方连
+      transition 都不写: 那是活动画面，不值得为 120ms 的高亮反复重绘。
+
+   2. 颜色一律走变量。 唯一的例外是 --acct: 那是用户自己给账号挑的颜色
+      (profile.color)，不属于任何调色板，所以它上面的文字用 --on-swatch +
+      text-shadow —— 这是 .e-cover (1077) 与 .ap-avatar (2254) 已经定下的写法。
+
+   3. body 没有 .focus-mode 时，本表必须零影响。 除了最后一节的账号色条
+      (--acct 未设置时解析为 transparent，等于没画)，其余每一条规则要么挂在
+      body.focus-mode 下，要么只命中 #focus-* / .fm-* 这些默认 display:none
+      的新元素。
+
+   与方案的两处偏离，都记在各自规则的注释里，WP1/WP2 请看一眼:
+     - §3.6 把 background:var(--cream-bg-2) 写在 #focus-strip 上。这里改由
+       #webviews-container 提供: #focus-layer 在 webview 之上，条带自己的不
+       透明底色会把活的缩略图整个盖住。底色下沉到容器 (在所有 webview 之下)
+       之后，条带区域露出来的正好是缝隙、内边距和按钮簇的底，视觉一致。
+     - §3.4 把 #focus-thumbs 放在 #focus-strip 里。这里把它提到 #focus-layer
+       的直接子节点: focus-mode.js 的 thumbRect() 给 .fm-thumb 的是容器坐标，
+       嵌在 position:absolute 的条带里会整体偏移一个条带原点。
+   ========================================================================== */
+
+
+/* ===== 1. 层 ============================================================== */
+
+/* 静态标记一直在 #webviews-container 里，但在焦点模式之外完全不存在。
+   z-index:5 让它盖在 webview 之上 (webview 带 transform 后各自成栈上下文，
+   但 z-index 仍是 auto，落在 0 层)；pointer-events:none 保证主视图的鼠标
+   事件照常落进游戏里。 */
+#focus-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  display: none;
+
+  /* 布局常数。WP1 需要 PAD/GAP 时可以读:
+     getComputedStyle(document.getElementById('focus-layer')).getPropertyValue('--fm-pad') */
+  --fm-pad: 8px;   /* = focus-mode.js PAD */
+  --fm-gap: 8px;   /* = focus-mode.js GAP */
+  --fm-edge: 2px;
+  /* 分区布局左缘那条竖着的控制簇有多宽。**必须等于 focus-mode.js 的
+     SECTOR_RAIL**：JS 用它算内容区起点，这里用它给 #focus-bar 定宽，
+     两边对不上就会出现一条缝或者按钮压到第一格上。 */
+  --fm-rail: 28px; /* = focus-mode.js SECTOR_RAIL */
+
+  font-family: var(--font-ui);
+  line-height: 1;
+}
+body.focus-mode #focus-layer { display: block; }
+
+
+/* ===== 2. webview 几何 ==================================================== */
+
+/* index.html 1340–1341 的 `webview { inset:0; width:100%; height:100% }` 是
+   "一个视图占满容器"的假设。焦点模式下每个视图的 left/top/width/height 都由
+   focus-mode.js 逐个写 inline，所以这里把 inset 放开 (只留 left/top 生效)，
+   并把变换原点钉在左上角 —— §2.2 的 X_i / Y_i 就是按左上角算的。
+   display:flex 是关键: 非活动的 tab 也必须留在布局里，一旦 display:none，
+   子帧的 RenderWidget 被 Hide，rAF 停摆，Flash 自己降频 —— 那正是这个功能
+   要解决的问题。 */
+body.focus-mode webview {
+  display: flex;
+  inset: auto;
+  transform-origin: 0 0;
+  /* will-change 常驻会让每个 webview 一直占着一份合成层内存；只在切换动画那
+     260ms 里提升，其余时间交还给系统。 */
+}
+
+/* 唯一允许"消失"的情况: 用户开了"折叠挂机账号"。§2.2 明确接受它被降频。 */
+body.focus-mode webview.fm-hidden { display: none; }
+
+/* .fm-main / .fm-thumb-view 故意没有样式: 主槽和缩略图的差别全在 inline 的
+   left/top/transform 里 (§2.4 applySlot)，CSS 再管一遍只会和 JS 打架。留着
+   它们是给调试和将来的 fallback 方案用的选择器把手。缩略图不需要
+   pointer-events:none —— #focus-strip 整块 pointer-events:auto 已经把条带里
+   的每一个事件都截下来了。 */
+
+/* 条带底色。§3.6 把它写在 #focus-strip 上，但那样会把活的缩略图整个盖住:
+   #focus-layer 在 webview 之上，条带的不透明底色会挡在缩略图前面。底色因此
+   下沉到容器本身 —— 它在所有 webview 之下，主槽被主视图完整覆盖，条带区域
+   露出来的就正好是缩略图之间的缝隙、内边距和按钮簇的底。 */
+body.focus-mode #webviews-container {
+  background: var(--cream-bg-2);
+  /* ≥7 个账号时条带要横向滚动 (§2.2)，滚出去的缩略图 webview 会画到容器外面 ——
+     .route 是 overflow:auto (index.html 944)，那会变成整个路由能被拖着滚。
+     在容器上剪掉。部分露出的缩略图照样是"在视口里"，不会被 Chromium 降频。 */
+  overflow: hidden;
+}
+
+
+/* ===== 3. 主槽边框 (A 项) ================================================ */
+
+/* 2px 账号色内描边，画在主视图最外的 2px 游戏像素上。inset 阴影不占布局、
+   中心透明、不吃鼠标 —— 主视图必须能正常玩。 */
+#focus-main-frame {
+  position: absolute;
+  box-shadow: inset 0 0 0 2px var(--acct, transparent);
+  border-radius: 0;
+  pointer-events: none;
+  display: none;
+}
+body.focus-mode #focus-main-frame { display: block; }
+
+
+/* ===== 4. 条带 =========================================================== */
+
+/* 底色见上一节。这里只剩描边和"吞掉事件"两件事:
+   条带整体 pointer-events:auto，这样即使缩略图 div 和被缩放的 webview 因为
+   取整差了半个像素，也不会有一次点击漏进游戏里 (§2.5 的硬要求)。 */
+#focus-strip {
+  position: absolute;
+  background: transparent; /* 见 body.focus-mode #webviews-container */
+  border-top: 1px solid var(--border);
+  box-sizing: border-box;
+  pointer-events: auto;
+  cursor: default;
+  display: none;
+}
+body.focus-mode #focus-strip { display: block; }
+
+/* 条带在右侧时，分隔线换到左边。 */
+body.focus-strip-right #focus-strip {
+  border-top: 0;
+  border-left: 1px solid var(--border);
+}
+
+/* 缩略图的坐标原点。
+   focus-mode.js 的 thumbRect() 给 .fm-thumb 和被缩放的 webview 同一个矩形，
+   而那个矩形是"容器"坐标 (底部条带: y = Mh + PAD)。#focus-strip 是
+   position:absolute，会给自己的子元素当包含块，所以 #focus-thumbs 在标记里
+   是条带的兄弟节点、#focus-layer 的直接子节点 —— 这样 inline 的 left/top 才
+   落在容器坐标系里。这是对 §3.4 标记的唯一改动，见 index.html 里的注释。
+   自己不吃事件，交给 .fm-thumb。 */
+#focus-thumbs {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+
+/* ===== 5. 缩略图 ========================================================= */
+
+/* 中心永远透明 —— 下面就是那个还在跑的 webview。整块 div 只有三样东西:
+   一圈账号色边框、左上角的名字药丸、右上角的徽章。 */
+.fm-thumb {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: auto;
+  background: transparent;
+  border: 2px solid var(--acct, var(--border));
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  user-select: none;
+  overflow: visible;
+  font-size: var(--fs-micro);
+  line-height: 1;
+}
+
+/* 挂机: 虚线 + 略降不透明度。只作用在这层 chrome 上，游戏画面不受影响
+   (opacity 挂在 div 上，webview 是它的兄弟节点)。 */
+.fm-thumb[data-state="idle"] {
+  border-style: dashed;
+  opacity: .85;
+}
+
+/* 固定为主视图: 外面再套一圈同色，读起来像"更厚的边"。 */
+.fm-thumb[data-pinned="1"] {
+  box-shadow: 0 0 0 2px var(--acct, var(--main-orange));
+}
+
+/* "听这个账号": 内圈一条强调色细线，和右上角的 .fm-badge.audio 互为提示。
+   box-shadow 不叠加只覆盖，所以两个状态同时成立时要写第三条把它们合起来。 */
+.fm-thumb[data-listen="1"] {
+  box-shadow: inset 0 0 0 1px var(--main-orange);
+}
+.fm-thumb[data-pinned="1"][data-listen="1"] {
+  box-shadow: inset 0 0 0 1px var(--main-orange),
+              0 0 0 2px var(--acct, var(--main-orange));
+}
+
+/* hover: 内 1px 高光 + 外一圈同色。没有 filter，没有 transition ——
+   这块区域下面是活动画面。 */
+.fm-thumb:hover {
+  box-shadow: inset 0 0 0 1px var(--sheen), 0 0 0 2px var(--acct, var(--main-orange));
+  opacity: 1;
+}
+.fm-thumb:active {
+  box-shadow: inset 0 0 0 1px var(--sheen), 0 0 0 2px var(--deep-orange);
+}
+
+/* 账号名药丸。用户挑的颜色不属于调色板，所以文字走 --on-swatch + 阴影,
+   同 .e-cover (index.html 1077) 与 .ap-avatar (2254)。 */
+.fm-thumb .fm-name {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  max-width: 68%;
+  /* 尺寸由 focus-mode.js 按缩略图宽度算好后写进 --fm-name-size / --fm-name-h
+     （12–24px）。缩略图小的时候名字也要一眼认得出，这是切账号的主要依据。 */
+  height: var(--fm-name-h, 20px);
+  line-height: var(--fm-name-h, 20px);
+  padding: 0 calc(var(--fm-name-size, 13px) * 0.55);
+  box-sizing: border-box;
+  border-radius: var(--r-pill);
+  background: var(--acct, var(--main-orange));
+  color: var(--on-swatch);
+  text-shadow: 0 1px 2px var(--shadow-tint-2);
+  font-size: var(--fm-name-size, 13px);
+  font-weight: 700;
+  letter-spacing: .01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: var(--elev-1);
+  pointer-events: none;
+}
+
+/* 状态徽章簇: 对战中 / 挂机 / 📌 / 🔊 */
+.fm-thumb .fm-badges {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  max-width: 30%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  overflow: hidden;
+  pointer-events: none;
+}
+/* focus-mode.js 建的是 <span>，装的是单个字形 (\u2694 / \U0001F4A4 / \U0001F4CC /
+   \U0001F50A)，所以要自己 blockify + 居中，字号也比名字药丸大一档才认得出。 */
+.fm-thumb .fm-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 15px;
+  min-width: 15px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: var(--r-pill);
+  background: var(--panel-white);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  box-shadow: var(--elev-1);
+  font-size: var(--fs-caption);
+  line-height: 1;
+  font-weight: 600;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+/* 对战中: 和 .speed-ind.hot / .tool-ind.on 用同一套"注意但不刺眼"的配色。 */
+.fm-thumb[data-state="battle"] .fm-badge.state {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--deep-orange);
+}
+/* 挂机: 安静的默认样式，不加粗。 */
+.fm-thumb[data-state="idle"] .fm-badge.state {
+  background: var(--panel-white);
+  border-color: var(--border);
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+.fm-thumb .fm-badge.pin,
+.fm-thumb .fm-badge.audio {
+  background: var(--main-orange);
+  color: var(--on-primary);
+  border-color: transparent;
+  padding: 0 4px;
+}
+
+/* 页面标题 (可选)。默认不画 —— 缩略图那么小，常驻一条标题只会挡住游戏。
+   鼠标停上去才出现，落在底边。 */
+.fm-thumb .fm-title {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 3px;
+  padding: 2px 5px;
+  box-sizing: border-box;
+  border-radius: var(--r-xs);
+  background: var(--panel-white);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: none;
+  pointer-events: none;
+}
+.fm-thumb:hover .fm-title { display: block; }
+
+
+/* ===== 6. 拖动排序 ======================================================= */
+
+/* 被拖的那一张跟着鼠标走 (transform:translate 由 JS 写 inline)，半透明，
+   并且退出命中测试，好让落点计算看到它下面的兄弟。 */
+.fm-thumb.dragging {
+  opacity: .6;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* 落点指示: 3px 的强调色竖线 (底部条带) / 横线 (右侧条带)，画在缝隙里。
+   #focus-strip 的 z-index 是 auto，所以这些伪元素和 #focus-shield(z:1) /
+   .dragging(z:2) 在同一个栈里排序，不会被盖掉。 */
+.fm-thumb.drop-before::before,
+.fm-thumb.drop-after::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--main-orange);
+  box-shadow: var(--elev-1);
+}
+.fm-thumb.drop-before::before { left: -6px; }
+.fm-thumb.drop-after::after  { right: -6px; }
+
+body.focus-strip-right .fm-thumb.drop-before::before,
+body.focus-strip-right .fm-thumb.drop-after::after {
+  left: -2px;
+  right: -2px;
+  width: auto;
+  height: 3px;
+}
+body.focus-strip-right .fm-thumb.drop-before::before { top: -6px; bottom: auto; }
+body.focus-strip-right .fm-thumb.drop-after::after  { bottom: -6px; top: auto; }
+
+/* 拖动挡板。一进入 OOPIF 表面，pointermove 就归 guest 所有，所以拖动开始后
+   要有一层透明的东西盖住整个容器 (§2.5)。默认不存在。 */
+#focus-shield {
+  position: absolute;
+  inset: 0;
+  display: none;
+  pointer-events: auto;
+  background: transparent;
+  z-index: 1;
+  cursor: grabbing;
+}
+#focus-shield.on { display: block; }
+
+
+/* ===== 7. 条带控制簇 ===================================================== */
+
+/* 不透明底，这样最后一张缩略图即使贴到按钮下面也不会从缝里露出来。
+   底部条带靠右，右侧条带靠下 (§3.6)。 */
+#focus-bar {
+  position: absolute;
+  right: var(--fm-pad);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  background: var(--cream-bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: var(--elev-1);
+  pointer-events: auto;
+  user-select: none;
+  /* 静止缩略图(z:auto) < 按钮簇(1) = 挡板(1，DOM 更后) < 拖动中的那张(2) */
+  z-index: 1;
+}
+body.focus-strip-right #focus-bar {
+  left: var(--fm-pad);
+  right: var(--fm-pad);
+  top: auto;
+  bottom: var(--fm-pad);
+  transform: none;
+  justify-content: center;
+  flex-wrap: wrap;
+  padding: 3px;
+  gap: 2px;
+}
+
+/* .tool-ind 的尺寸感 (index.html 1212–1224)，只是收成方块。 */
+#focus-bar .fm-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: var(--ctl-xs);
+  height: var(--ctl-xs);
+  padding: 0 3px;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--warm-brown);
+  font-size: var(--fs-caption);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: default;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+#focus-bar .fm-btn:hover { background: var(--hover-bg); color: var(--text-primary); }
+#focus-bar .fm-btn:active { background: var(--soft-wheat); color: var(--dark-brown); }
+#focus-bar .fm-btn.on {
+  background: var(--main-orange);
+  color: var(--on-primary);
+  border-color: transparent;
+  font-weight: 600;
+}
+#focus-bar .fm-btn.disabled { opacity: .35; pointer-events: none; }
+/* 退出是这一簇里唯一的破坏性动作，hover 时说清楚。 */
+#focus-bar #fm-exit:hover { background: var(--deep-orange); color: var(--on-primary); }
+
+
+/* ===== 8. 折叠 =========================================================== */
+
+/* 折叠不是"藏起来"—— 缩略图仍然在视口内、仍然全速 (§2.2 的物理约束)，只是
+   小到一眼看不出画面。这时候能认账号的就只剩名字了，所以名字放大，徽章和
+   标题让位。 */
+body.focus-strip-collapsed .fm-thumb .fm-name {
+  max-width: 92%;
+  height: 16px;
+  line-height: 16px;
+  font-size: var(--fs-caption);
+}
+body.focus-strip-collapsed .fm-thumb .fm-badges { display: none; }
+body.focus-strip-collapsed .fm-thumb:hover .fm-title { display: none; }
+
+/* 折叠后条带只有十几像素高，按钮簇收到只剩"展开"和"退出"。 */
+body.focus-strip-collapsed #focus-bar .fm-btn { display: none; }
+body.focus-strip-collapsed #focus-bar #fm-collapse,
+body.focus-strip-collapsed #focus-bar #fm-exit { display: flex; }
+body.focus-strip-collapsed #focus-bar { padding: 0 2px; }
+body.focus-strip-right.focus-strip-collapsed #focus-bar { padding: 2px; }
+
+/* 游戏模式只收 chrome 行 (index.html 1454–1463)，条带在容器里，尺寸不变。
+   写出来是为了让"游戏模式 + 焦点模式"这条组合路径有据可查。 */
+body.game-mode.focus-mode #focus-bar .fm-btn { height: var(--ctl-xs); font-size: var(--fs-caption); }
+
+
+/* ===== 9. 顶栏开关 ======================================================= */
+
+/* #strip-focus 本身继承 .chrome-row .tool-ind + #tab-strip .win-act，所以
+   宽度、游戏模式下的收窄都是白拿的。这里只补"开着"的高亮 —— 用
+   #tab-strip .win-act.ok (1295) 的那一套，而不是 .tool-ind.on 的警告色:
+   焦点模式是一个模式，不是一个警告。 */
+#tab-strip #strip-focus.on {
+  background: var(--main-orange);
+  color: var(--on-primary);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+
+/* ===== 10. 标签页账号色条 (A 项) ========================================= */
+
+/* --acct 由 renderer.js 在重画 tab 时写在 stripEl 上 (§3.1 钩子 #6)，没有
+   合法颜色时它把变量清掉，回落到 transparent —— 也就是"什么都没画"。所以
+   这两条规则在没有焦点模式、甚至没有 focus-mode.js 的情况下都是零影响。
+   .active 那条必须把原来的 elev-1 + sheen 一起写进来 (index.html 1157):
+   box-shadow 不叠加，只覆盖，分开写会互相吃掉。 */
+#tab-strip .tab {
+  box-shadow: inset 3px 0 0 var(--acct, transparent);
+}
+#tab-strip .tab.active {
+  box-shadow: inset 3px 0 0 var(--acct, transparent),
+              var(--elev-1),
+              inset 0 1px 0 var(--sheen);
+}
+
+
+/* ============================================================ 11 切换动画 + 固定槽位占位
+
+   槽位是固定的：每个账号在条带里有一个恒定位置，正在主画面的那个账号留下一个虚线
+   占位框（focus-mode.js 打的 data-current="1"）。切换时其余缩略图一格都不动。
+
+   动画只在切换那一下开（body.fm-switching 由 JS 加、260ms 后撤）。resize、拖动、
+   滚动都不带过渡 —— 那些场合动画只会让人觉得迟钝。过渡的属性只有 transform 和
+   opacity，两个都是纯合成属性，不触发宿主页面重排，游戏画面不掉帧。 */
+body.focus-mode.fm-switching webview {
+  transition: transform 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+body.focus-mode.fm-switching .fm-thumb {
+  transition: opacity 220ms ease, background-color 220ms ease, border-color 220ms ease;
+}
+
+/* 放大中的那一个要压在其它视图上面，否则它长大的过程会被 DOM 顺序靠后的缩略图切掉。
+   仍然在 #focus-layer（z-index:5）之下，覆盖层的边框和按钮不会被盖住。 */
+body.focus-mode webview.fm-main {
+  z-index: 1;
+}
+
+/* 主画面账号在条带里的占位格：这一格背后没有 webview，露出的是容器底色。
+   虚线 + 底色 + 只留账号名，读起来就是"这个号现在在上面"。
+   ——「占位框」这套外观**只属于条带模式**。分区模式下焦点那一格里装的是真正
+   在跑的主视图，虚线和底色会把游戏盖掉，所以这三条都挂在 .focus-layout-strip
+   下面，分区的版本见第 12 节。 */
+body.focus-layout-strip .fm-thumb[data-current="1"] {
+  cursor: default;
+  border-style: dashed;
+  background: var(--cream-bg-2);
+}
+/* 徽章两种布局都不画：条带里这一格是空的，分区里右上角正好压着这个游戏的小地图。 */
+.fm-thumb[data-current="1"] .fm-badges {
+  display: none;
+}
+body.focus-layout-strip .fm-thumb[data-current="1"]:hover,
+body.focus-layout-strip .fm-thumb[data-current="1"]:active {
+  box-shadow: none;
+}
+body.focus-layout-strip .fm-thumb[data-current="1"] .fm-name {
+  opacity: .75;
+}
+
+/* 只在动画期间提升合成层，见上面 §2 的说明。 */
+body.focus-mode.fm-switching webview {
+  will-change: transform;
+}
+
+
+/* ============================================================ 12 分区布局 (sector)
+
+   条带 (strip)：一个大主视图 + 底/右一条固定槽位的活缩略图。今天的行为，默认。
+   分区 (sector)：n = 2–4 个账号各占容器的一个角 / 一侧，焦点那个占大份 (F)，
+   其余占小份 (1−F)；切换焦点时每个账号都朝**自己那个角**缩 / 涨，格子一步不换。
+   n = 1 铺满容器；n ≥ 5 本轮退回条带 (prefs 不变)。
+
+   几何全部由 focus-mode.js 的 sectorGeometry() 算好，写成 inline 的
+   translate3d(x,y,0) scale(s)。本节只管三件事，一个像素的位置都不算：
+
+     1. 焦点那一格的 chrome 从"虚线占位框"变回"正常的账号色描边"，并且
+        **绝不吃事件** —— 它下面就是正在玩的那个游戏，一次点击、一次滚轮漏不得。
+     2. #focus-bar 从条带里的横排按钮变成钉在左缘的竖排按钮。JS 在左边留了
+        --fm-rail 宽的一条，那条底下没有任何游戏画面，遮挡为零。
+     3. 只属于条带的装饰 (主槽描边、落点竖线) 关掉，换上分区自己的那一份。
+
+   规矩和前面几节一样：没有 backdrop-filter、没有 filter、没有 animation，
+   覆盖层的中心永远透明。 */
+
+/* 左侧竖条。#focus-strip 在分区里只是这条竖条的底和分隔线 —— #focus-bar 是它的
+   子节点，把条带藏起来按钮就跟着没了，所以它必须留在布局里 (JS 给的矩形是
+   x=0, w=PAD+SECTOR_RAIL+GAP/2, 满高)。底色仍然来自 #webviews-container。 */
+body.focus-layout-sector #focus-strip {
+  border-top: 0;
+  border-right: 1px solid var(--border);
+}
+
+/* 控制簇竖起来钉在左缘。宽度必须等于 focus-mode.js 的 SECTOR_RAIL (= --fm-rail)。
+   底是不透明的，加上 pointer-events:auto 和 JS 里每个按钮的 preventDefault，
+   点在这上面绝不会漏进任何一个 guest。 */
+body.focus-layout-sector #focus-bar {
+  left: var(--fm-pad);
+  right: auto;
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+  flex-direction: column;
+  width: var(--fm-rail);
+  padding: 3px 0;
+  gap: 2px;
+}
+body.focus-layout-sector #focus-bar .fm-btn {
+  width: var(--ctl-xs);
+  min-width: var(--ctl-xs);
+  padding: 0;
+}
+/* 条带专属的四个按钮在分区里没有意义：条带位置 (没有条带)、缩略图档位和折叠
+   (小格的缩放是 F 推出来的，不给按钮调)。留下 ＋ / 挂 / ▦ / ✕ 四个。 */
+body.focus-layout-sector #focus-bar #fm-pos,
+body.focus-layout-sector #focus-bar #fm-size-dn,
+body.focus-layout-sector #focus-bar #fm-size-up,
+body.focus-layout-sector #focus-bar #fm-collapse {
+  display: none;
+}
+
+/* 主槽描边：分区里焦点那一格的 .fm-thumb 已经画了同一圈账号色边框，两条叠起来
+   就是 4px。位置 JS 照算 (paintOverlay 里跟着焦点格走)，这里只是不画。 */
+body.focus-layout-sector #focus-main-frame {
+  display: none;
+}
+
+/* 焦点那一格。条带模式下这一格背后是空的，分区模式下背后是**正在玩的那个游戏**：
+     - pointer-events:none —— 它只是一圈边框，一次点击 / 滚轮 / 右键都不许吃掉，
+       全部要落进 guest 里去，否则这个号就没法玩了；
+     - 实线 + 完全透明的中心，没有底色；
+     - 挂机状态的虚线和 opacity:.85 也要挡掉。权重：3 个类 (focus-layout-sector +
+       fm-thumb + [data-current]) 压过 .fm-thumb[data-state="idle"] 的 2 个。 */
+body.focus-layout-sector .fm-thumb[data-current="1"] {
+  pointer-events: none;
+  cursor: default;
+  border-style: solid;
+  background: transparent;
+  opacity: 1;
+}
+body.focus-layout-sector .fm-thumb[data-current="1"]:hover,
+body.focus-layout-sector .fm-thumb[data-current="1"]:active {
+  box-shadow: none;
+}
+/* 焦点那一格的名字药丸要收小。focus-mode.js 按格子宽度算 --fm-name-size，大格
+   有一千多像素宽，算出来会顶到 24px / 41px 高 —— 那是压在**正在打的那一局**
+   左上角的一块牌子。这里固定成一个小号药丸：认号靠边框的账号色 + 顶栏标签页
+   已经够了，主画面上的字越小越好。条带模式不受影响（那一格背后是空的）。 */
+body.focus-layout-sector .fm-thumb[data-current="1"] .fm-name {
+  height: 18px;
+  line-height: 18px;
+  font-size: var(--fs-caption);
+  padding: 0 7px;
+  max-width: 40%;
+}
+
+/* 拖动排序的落点：分区里没有"缝"，落在哪一格就把那一格整个高亮，松手后被拖的
+   账号就占这一格。注意焦点那一格 pointer-events:none，所以正在主画面的那个号
+   拖不动 —— 想给它换角，先切到别的号。 */
+.fm-thumb.drop-into {
+  box-shadow: inset 0 0 0 3px var(--main-orange),
+              0 0 0 2px var(--main-orange);
+}
+
+/* 切换动画：分区模式下 .fm-thumb 的**矩形本身**会变（大格 ⇄ 小格），而条带模式
+   下它是固定槽位、只换虚线。所以只有这里需要让边框跟着 webview 一起走 —— 否则
+   账号色框会瞬间跳到新尺寸，底下的画面还在滑，看着像框脱了。
+   代价：这 260ms 里最多 4 个绝对定位的小 div 每帧改一次 left/top/width/height。
+   它们在 #focus-layer 里脱离文档流，不会牵动任何 webview 的布局；而且只在切换
+   那一下开（body.fm-switching 由 JS 加、260ms 后撤），静止时一条 transition
+   都不留 —— 这正是本表第 11 节定下的规矩。
+   曲线与 body.focus-mode.fm-switching webview 完全一致，两者必须同步。
+   权重与上面那条 .fm-thumb 的通用规则相同（3 个类 + 1 个元素），靠写在后面取胜。*/
+body.focus-layout-sector.fm-switching .fm-thumb {
+  transition: opacity 220ms ease,
+              background-color 220ms ease,
+              border-color 220ms ease,
+              left 260ms cubic-bezier(0.32, 0.72, 0, 1),
+              top 260ms cubic-bezier(0.32, 0.72, 0, 1),
+              width 260ms cubic-bezier(0.32, 0.72, 0, 1),
+              height 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+/* 拖动中的那一张永远不带过渡：它要 1:1 跟着鼠标。 */
+body.focus-layout-sector.fm-switching .fm-thumb.dragging {
+  transition: none;
+}

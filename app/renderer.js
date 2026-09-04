@@ -1,6 +1,13 @@
 const { ipcRenderer } = require('electron');
 const i18n = require('./i18n.js');
 
+// ----- Beijing time (UTC+8, no DST). Never use the local timezone for day math:
+// the yearly report and the "opened today" marker must agree with the main process. -----
+const BJ_OFFSET = 8 * 60 * 60 * 1000;
+function beijingDay(ts)   { return new Date((ts || Date.now()) + BJ_OFFSET).toISOString().slice(0, 10); }
+function beijingMonth(ts) { return beijingDay(ts).slice(0, 7); }
+function beijingHour(ts)  { return new Date((ts || Date.now()) + BJ_OFFSET).getUTCHours(); }
+
 // ----- state -----
 const tabs = [];
 let activeId = null;
@@ -23,6 +30,8 @@ const DEFAULT_SPEED_SHORTCUTS = {
   next: 'Alt+BracketRight',
   reset: 'Alt+Digit0',
   measure: 'Alt+KeyM',
+  screenshot: 'Alt+KeyS',
+  aim: 'Alt+KeyA',
 };
 const DEFAULT_SPEED_HOTKEYS = [
   { factor: 1, shortcut: 'Alt+Digit1' },
@@ -47,7 +56,10 @@ let settings = {
   theme: 'xiaozhu-native',
   showQuickNote: true,
   globalMuted: false,
+  newTabMode: 'current',
+  newTabUrl: '',
 };
+const NEW_TAB_MODES = ['current', 'home', 'custom'];
 let appearanceExpanded = false;
 let customThemeSaveTimer = null;
 let speedFactor = 1;
@@ -56,6 +68,13 @@ let currentRoute = 'home';
 let pendingSavePrompt = null;
 let profileOpenUrl = null;
 let windowProfileId = null; // each window is bound to one profile (Chrome-style)
+// Profiles page: view order ('manual' = the real stored order, 'recent' = display-only sort).
+let profileOrderView = 'manual';
+let profileDragId = null;       // id of the card being dragged, null when idle
+let profileRenderPending = false; // a profiles:changed arrived mid-drag; redraw on dragend
+let profileEditDraft = null;    // { id, name, color, caret, fresh } — survives broadcast redraws
+let runningProfileIds = new Set(); // profiles that currently have a window open
+const touchedProfileIds = new Set(); // profiles this window already counted as "opened"
 let menuCloseHandler = null;
 let shortcutCaptureTarget = null;
 let measuring = {
@@ -77,16 +96,16 @@ const PROFILE_COLORS = ['#F4A23C', '#C86B2A', '#8B4E2A', '#5B4636', '#E09F3E', '
 const THEME_ASSET_BASE = 'assets/themes/';
 const DEFAULT_CUSTOM_THEME = {
   colors: {
-    background: '#F7F0E3',
-    backgroundAlt: '#E9D9BD',
-    panel: '#FFF8EA',
-    panelAlt: '#FFFDF6',
-    soft: '#EAD9A5',
-    accent: '#B9822E',
-    accentDeep: '#7E4F25',
-    muted: '#795D3D',
-    text: '#2E2418',
-    subtext: '#766751',
+    background: '#F7EFDE',
+    backgroundAlt: '#ECE0C5',
+    panel: '#FFF8E9',
+    panelAlt: '#FFFCF4',
+    soft: '#EFDCA8',
+    accent: '#90631C',
+    accentDeep: '#6F4718',
+    muted: '#7A6647',
+    text: '#2C2211',
+    subtext: '#715E3F',
   },
   badgeImage: null,
   mascotImage: null,
@@ -116,61 +135,67 @@ const THEMES = [
     id: 'xiaozhu-native',
     nameKey: 'theme.xiaozhu_native',
     descKey: 'theme.xiaozhu_native_desc',
-    swatches: ['#F4F1E8', '#6F9564', '#D0A24B'],
+    swatches: ['#F3F0E6', '#12657C', '#A9DCA0'],
   },
   {
     id: 'bamboo-morning',
     nameKey: 'theme.bamboo_morning',
     descKey: 'theme.bamboo_morning_desc',
-    swatches: ['#F4F3E8', '#6F9564', '#C79E4A'],
+    swatches: ['#EFF3EA', '#0A5F94', '#A6DFB4'],
   },
   {
     id: 'orange-special',
     nameKey: 'theme.orange_special',
     descKey: 'theme.orange_special_desc',
-    swatches: ['#F7EFE3', '#C8843C', '#7B5C3D'],
+    swatches: ['#F8EFE1', '#1D5FA8', '#F7C878'],
   },
   {
     id: 'flash-archive',
     nameKey: 'theme.flash_archive',
     descKey: 'theme.flash_archive_desc',
-    swatches: ['#F2EBDD', '#8B6A3E', '#B85C38'],
+    swatches: ['#F1E9D9', '#1F5E77', '#E2C588'],
   },
   {
     id: 'wolf-wheat',
     nameKey: 'theme.wolf_wheat',
     descKey: 'theme.wolf_wheat_desc',
-    swatches: ['#F7F0E3', '#B9822E', '#5F7C38'],
+    swatches: ['#F7EFDE', '#2C6B45', '#E8CE84'],
   },
   {
     id: 'tea-garden',
     nameKey: 'theme.tea_garden',
     descKey: 'theme.tea_garden_desc',
-    swatches: ['#F5EEDF', '#9B7042', '#6B7B4C'],
+    swatches: ['#F2F0E1', '#A63F22', '#CBD99A'],
+  },
+  {
+    id: 'sakura',
+    nameKey: 'theme.sakura',
+    descKey: 'theme.sakura_desc',
+    swatches: ['#FDF3F6', '#0A69A6', '#CDEBFB'],
   },
   {
     id: 'mist-blue',
     nameKey: 'theme.mist_blue',
     descKey: 'theme.mist_blue_desc',
-    swatches: ['#EEF2F3', '#557F98', '#9B8050'],
+    swatches: ['#EDF1F3', '#98512E', '#A8CBDD'],
   },
   {
     id: 'moonlight',
     nameKey: 'theme.moonlight',
     descKey: 'theme.moonlight_desc',
-    swatches: ['#151917', '#5E9E6B', '#D9A441'],
+    swatches: ['#161D19', '#E0B45F', '#6ECBC4'],
   },
   {
     id: 'arcade-night',
     nameKey: 'theme.arcade_night',
     descKey: 'theme.arcade_night_desc',
-    swatches: ['#10131B', '#4D9DBA', '#A36586'],
+    swatches: ['#111726', '#5FC2DE', '#7BE0D8'],
   },
   {
     id: 'graphite',
     nameKey: 'theme.graphite',
     descKey: 'theme.graphite_desc',
-    swatches: ['#ECEFF2', '#66717D', '#4D82B8'],
+    swatches: ['#EDEFF2', '#356697', '#B4C4D6'],
   },
   {
     id: 'custom',
@@ -223,7 +248,9 @@ async function loadStores() {
   const [h, bm, pr, pw, sk, nt, tk, st, hu] = await Promise.all([
     ipcRenderer.invoke('store:get', 'history'),
     ipcRenderer.invoke('store:get', 'bookmarks'),
-    ipcRenderer.invoke('store:get', 'profiles'),
+    // Profiles live in the main process now: every window used to write the whole
+    // array back through store:set and clobber the other windows' edits.
+    ipcRenderer.invoke('profiles:list'),
     ipcRenderer.invoke('store:get', 'passwords'),
     ipcRenderer.invoke('store:get', 'pw_skipped_sites'),
     ipcRenderer.invoke('store:get', 'notes'),
@@ -255,6 +282,14 @@ async function loadStores() {
   }
   if (settings.globalMuted == null) {
     settings.globalMuted = false;
+    settingsChanged = true;
+  }
+  if (!NEW_TAB_MODES.includes(settings.newTabMode)) {
+    settings.newTabMode = 'current';
+    settingsChanged = true;
+  }
+  if (typeof settings.newTabUrl !== 'string') {
+    settings.newTabUrl = '';
     settingsChanged = true;
   }
   const normalizedCustomTheme = normalizeCustomTheme(settings.customTheme);
@@ -300,7 +335,26 @@ async function loadStores() {
 }
 const saveHistory      = () => ipcRenderer.invoke('store:set', 'history', history);
 const saveBookmarks    = () => ipcRenderer.invoke('store:set', 'bookmarks', bookmarks);
-const saveProfiles     = () => ipcRenderer.invoke('store:set', 'profiles', profiles);
+// --- Profile mutations: main is the single source of truth. Never store:set the
+// whole array; each helper resolves with (and adopts) the authoritative list. ---
+function adoptProfiles(list) {
+  if (Array.isArray(list)) profiles = list;
+  return profiles;
+}
+function upsertProfile(patch) {
+  if (!patch || !patch.id) return Promise.resolve(profiles);
+  return ipcRenderer.invoke('profiles:upsert', patch).then(adoptProfiles).catch(() => profiles);
+}
+function reorderProfiles(ids) {
+  return ipcRenderer.invoke('profiles:reorder', ids).then(adoptProfiles).catch(() => profiles);
+}
+function removeProfile(id) {
+  return ipcRenderer.invoke('profiles:remove', id).then(adoptProfiles).catch(() => profiles);
+}
+function touchProfile(id) {
+  if (!id) return Promise.resolve(profiles);
+  return ipcRenderer.invoke('profiles:touch', id).then(adoptProfiles).catch(() => profiles);
+}
 const savePasswords    = () => ipcRenderer.invoke('store:set', 'passwords', passwords);
 const saveSkippedSites = () => ipcRenderer.invoke('store:set', 'pw_skipped_sites', skippedSites);
 const saveSettings     = () => ipcRenderer.invoke('store:set', 'settings', settings);
@@ -333,6 +387,167 @@ function normalizeInput(input) {
 }
 function hostOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return url; }
+}
+// Where a new tab lands when the caller has no destination of its own: the + button,
+// the per-account new-tab menu and \u2318T / the New Tab menu item all ask here. Default
+// 'current' keeps the user on the game they are already in instead of the 4399 home page;
+// anything unusable as a starting address (no tab yet, about:blank, a data: URL) falls
+// back to homeUrl so a new tab is never blank.
+function newTabUrl() {
+  const mode = NEW_TAB_MODES.includes(settings.newTabMode) ? settings.newTabMode : 'current';
+  if (mode === 'home') return homeUrl;
+  if (mode === 'custom') {
+    const raw = String(settings.newTabUrl == null ? '' : settings.newTabUrl).trim();
+    return raw ? normalizeInput(raw) : homeUrl;
+  }
+  const t = activeTab();
+  const url = t && t.url ? String(t.url).trim() : '';
+  return /^https?:\/\//i.test(url) ? url : homeUrl;
+}
+
+// ---------- site rules (profile.sites) ----------
+// A profile may claim hosts: opening one of them the "cold" way (address bar, bookmark,
+// home tile, plain new tab) starts the tab on that account. Rules live on the profile as
+// a plain array of bare hosts — "4399.com" — and every shape the user might type is
+// normalised down to that here, so the matcher only ever sees one form.
+function normalizeSiteRule(value) {
+  let s = String(value == null ? '' : value).trim().toLowerCase();
+  if (!s) return '';
+  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');    // scheme
+  s = s.replace(/^[^/@]*@/, '');                   // user:pass@
+  s = s.split('/')[0].split('?')[0].split('#')[0]; // path / query / hash
+  s = s.replace(/:\d+$/, '');                      // port
+  s = s.replace(/^www\./, '');
+  s = s.replace(/^\.+|\.+$/g, '');                  // stray dots
+  if (!s || !/^[a-z0-9.-]+$/.test(s)) return '';
+  return s;
+}
+function normalizeSiteRuleList(values) {
+  const out = [];
+  const list = Array.isArray(values) ? values : [];
+  for (const raw of list) {
+    const rule = normalizeSiteRule(raw);
+    if (rule && out.indexOf(rule) < 0) out.push(rule);
+  }
+  return out;
+}
+// Suffix match on label boundaries only: "4399.com" owns ddt.4399.com but must not own
+// my4399.com (no boundary) or 4399.com.evil.com (wrong end).
+function hostMatchesRule(host, rule) {
+  const h = String(host || '').trim().toLowerCase().replace(/\.+$/, '');
+  const r = normalizeSiteRule(rule);
+  if (!h || !r) return false;
+  return h === r || h.endsWith('.' + r);
+}
+function siteHostOf(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  try {
+    const h = new URL(raw).hostname;
+    if (h) return h.toLowerCase().replace(/\.+$/, '');
+  } catch (e) {}
+  return normalizeSiteRule(raw);   // a bare "4399.com/x" typed by hand
+}
+function profileSites(p) {
+  return (p && Array.isArray(p.sites)) ? p.sites : [];
+}
+// The longest (most specific) matching rule wins, so "ddt.4399.com" beats "4399.com".
+// A tie goes to the profile listed first — that array order is the order the user sees.
+function profileForUrl(url, list) {
+  const source = Array.isArray(list) ? list : profiles;
+  const host = siteHostOf(url);
+  if (!host) return null;
+  let best = null;
+  let bestLen = -1;
+  for (const p of source) {
+    if (!p) continue;
+    for (const raw of profileSites(p)) {
+      const rule = normalizeSiteRule(raw);
+      if (!rule || !hostMatchesRule(host, rule)) continue;
+      if (rule.length > bestLen) { bestLen = rule.length; best = p; }
+    }
+  }
+  return best;
+}
+// A host belongs to exactly one account, so claiming it takes it away from whoever held
+// it — an ambiguous rule would make the account a coin flip. Returns the names it took
+// the host from, for the toast.
+async function writeProfileSites(profileId, rules) {
+  const list = normalizeSiteRuleList(rules);
+  const taken = [];
+  const patches = [];
+  for (const other of profiles) {
+    if (!other || other.id === profileId) continue;
+    const current = normalizeSiteRuleList(profileSites(other));
+    const kept = current.filter(r => list.indexOf(r) < 0);
+    if (kept.length !== current.length) {
+      patches.push({ id: other.id, sites: kept });
+      taken.push(other.name || '');
+    }
+  }
+  await upsertProfile({ id: profileId, sites: list });
+  for (const patch of patches) await upsertProfile(patch);
+  return taken;
+}
+// Snapshot every account's rule list, so any site change can be put back exactly
+// as it was — assigning a host silently takes it off whoever held it, and that
+// is not something a user can reconstruct from memory.
+function siteRulesSnapshot() {
+  return profiles.map(p => ({ id: p.id, sites: normalizeSiteRuleList(profileSites(p)) }));
+}
+async function restoreSiteRules(snapshot) {
+  if (!Array.isArray(snapshot)) return;
+  for (const row of snapshot) {
+    const p = profiles.find(x => x && x.id === row.id);
+    if (!p) continue;
+    const now = normalizeSiteRuleList(profileSites(p));
+    if (now.join('\n') === row.sites.join('\n')) continue;
+    await upsertProfile({ id: row.id, sites: row.sites });
+  }
+  if (currentRoute === 'profiles') renderProfiles();
+}
+async function clearSiteRule(host) {
+  const rule = normalizeSiteRule(host);
+  if (!rule) return [];
+  const cleared = [];
+  for (const p of profiles) {
+    const current = normalizeSiteRuleList(profileSites(p));
+    const kept = current.filter(r => r !== rule);
+    if (kept.length !== current.length) {
+      cleared.push(p.name || '');
+      await upsertProfile({ id: p.id, sites: kept });
+    }
+  }
+  if (currentRoute === 'profiles') renderProfiles();
+  return cleared;
+}
+async function assignSiteToProfile(host, profileId) {
+  const rule = normalizeSiteRule(host);
+  const target = profiles.find(p => p.id === profileId);
+  if (!rule || !target) return;
+  const before = siteRulesSnapshot();
+  const next = normalizeSiteRuleList(profileSites(target).concat([rule]));
+  const taken = await writeProfileSites(profileId, next);
+  const name = target.name || '';
+  const undo = { label: tOr('common.undo', '\u64a4\u9500'), onClick: () => restoreSiteRules(before) };
+  if (taken.length) {
+    showToast(tOr('sites.moved_toast', '{host} \u5df2\u4ece {from} \u6539\u7ed9 {name}')
+      .replace('{host}', rule).replace('{from}', taken.join('\u3001')).replace('{name}', name), undo);
+  } else {
+    showToast(tOr('sites.assigned_toast', '{host} \u4ee5\u540e\u7528 {name} \u6253\u5f00')
+      .replace('{host}', rule).replace('{name}', name), undo);
+  }
+  if (currentRoute === 'profiles') renderProfiles();
+}
+async function unassignSite(host) {
+  const rule = normalizeSiteRule(host);
+  if (!rule) return;
+  const before = siteRulesSnapshot();
+  const cleared = await clearSiteRule(rule);
+  if (!cleared.length) return;
+  showToast(tOr('sites.cleared_toast', '{host} \u4e0d\u518d\u6307\u5b9a\u8d26\u53f7')
+    .replace('{host}', rule),
+    { label: tOr('common.undo', '\u64a4\u9500'), onClick: () => restoreSiteRules(before) });
 }
 function domainLetter(url) {
   const h = hostOf(url);
@@ -436,28 +651,128 @@ function formatTime(ts) {
   if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
+// Fall back to a literal only while the i18n dictionary lacks the key, so the
+// strings light up automatically once common.just_now / common.ago / common.yesterday land.
+function tOr(key, fallback) {
+  const dict = (i18n.dicts && (i18n.dicts[i18n.getLang()] || i18n.dicts.en)) || null;
+  if (dict && dict[key] != null) return dict[key];
+  return fallback;
+}
+function isZhLang() { return String(i18n.getLang() || '').toLowerCase().indexOf('zh') === 0; }
+// "3 h ago" / "3 小时前" / "yesterday" / "9月1日" — all day math in Beijing time.
+function formatRelativeTime(ts) {
+  const stamp = Number(ts);
+  if (!Number.isFinite(stamp) || stamp <= 0) return '';
+  const zh = isZhLang();
+  const now = Date.now();
+  const diff = Math.max(0, now - stamp);
+  const minutes = Math.floor(diff / 60000);
+  const ago = (text) => zh ? (text + tOr('common.ago', '前')) : (text + ' ' + tOr('common.ago', 'ago'));
+  if (minutes < 1) return tOr('common.just_now', zh ? '刚刚' : 'just now');
+  if (minutes < 60) return ago(minutes + ' ' + i18n.t('common.minutes'));
+  const today = beijingDay(now);
+  const day = beijingDay(stamp);
+  if (day === today) return ago(Math.floor(minutes / 60) + ' ' + i18n.t('common.hours'));
+  const dayDiff = Math.round((Date.parse(today + 'T00:00:00Z') - Date.parse(day + 'T00:00:00Z')) / 86400000);
+  if (dayDiff === 1) return tOr('common.yesterday', zh ? '昨天' : 'yesterday');
+  if (dayDiff > 1 && dayDiff < 7) return ago(dayDiff + ' ' + i18n.t('common.days'));
+  const d = new Date(stamp + BJ_OFFSET);
+  const month = d.getUTCMonth() + 1;
+  const date = d.getUTCDate();
+  if (zh) return month + '月' + date + '日';
+  return day.slice(5).replace('-', '/');
+}
+// Three states, in priority order: a live window beats "opened today".
+function profileDayState(p) {
+  if (!p) return 'idle';
+  if (runningProfileIds.has(p.id)) return 'running';
+  const last = Number(p.lastOpenedAt);
+  if (Number.isFinite(last) && last > 0 && beijingDay(last) === beijingDay()) return 'today';
+  return 'idle';
+}
+function profileDayStateLabel(state) {
+  if (state === 'running') return i18n.t('prof.running_now');
+  if (state === 'today') return i18n.t('prof.opened_today');
+  return i18n.t('prof.not_opened_today');
+}
+// The three-state light is styled as `.profile-card .pc-dot` in index.html, so the
+// same classes outside a profile card would render an invisible span. Menus reuse
+// the classes (so the markup keeps one vocabulary) and carry the geometry inline,
+// always through the theme variables -- never a fixed hex, or the light would stop
+// following the palette.
+function dayStateDotStyle(state) {
+  // The ring is the menu's own background, so it is invisible on a resting row and
+  // becomes the outline that keeps the light readable when :hover floods the row
+  // with --main-orange (which is exactly the 'running' fill).
+  const base = 'width:8px;height:8px;border-radius:50%;flex:0 0 auto;border:1px solid var(--border-strong);'
+    + 'box-shadow:0 0 0 1.5px var(--panel-white-2);background:transparent;';
+  if (state === 'running') return base + 'background:var(--main-orange);border-color:var(--main-orange);';
+  if (state === 'today') return base + 'background:var(--soft-wheat);border-color:var(--main-orange);';
+  return base;
+}
+// Repaint the lights inside an already-open menu when windows:changed lands, so a
+// window that opens or closes behind the menu does not leave a stale light on screen.
+function repaintMenuDayStates() {
+  const dots = document.querySelectorAll('.menu .pc-dot[data-state-for]');
+  for (let i = 0; i < dots.length; i++) {
+    const dot = dots[i];
+    const id = dot.getAttribute('data-state-for');
+    const p = profiles.find(x => x && x.id === id);
+    if (!p) continue;
+    const state = profileDayState(p);
+    if (dot.getAttribute('data-day-state') === state) continue;
+    dot.setAttribute('data-day-state', state);
+    dot.className = 'pc-dot ' + state;
+    dot.style.cssText = dayStateDotStyle(state);
+    const row = dot.parentNode;
+    if (row && row.classList && row.classList.contains('menu-item')) row.title = profileDayStateLabel(state);
+  }
+}
+// The stored array order is the Cmd+1..9 order; 'recent' only reorders the view.
+function profilesForView() {
+  if (profileOrderView !== 'recent') return profiles.slice();
+  return profiles.slice().sort((a, b) => (Number(b.lastOpenedAt) || 0) - (Number(a.lastOpenedAt) || 0));
+}
+function refreshRunningProfiles() {
+  return ipcRenderer.invoke('windows:list').then((list) => {
+    applyWindowList(list);
+  }).catch(() => {});
+}
+function applyWindowList(list) {
+  const next = new Set();
+  if (Array.isArray(list)) {
+    for (const w of list) if (w && w.profileId) next.add(String(w.profileId));
+  }
+  let changed = next.size !== runningProfileIds.size;
+  if (!changed) { for (const id of next) if (!runningProfileIds.has(id)) { changed = true; break; } }
+  runningProfileIds = next;
+  if (!changed) return;
+  repaintMenuDayStates();
+  if (currentRoute === 'profiles') renderProfiles();
+}
 function profileById(id) { return profiles.find(p => p.id === id) || profiles[0] || null; }
 function defaultProfile() { return profileById(settings.defaultProfileId) || profiles[0] || null; }
 function ensureProfiles() {
-  let changed = false;
   if (!Array.isArray(profiles)) profiles = [];
+  const dirty = [];
   if (!profiles.length) {
     profiles = [
       { id: 'main', name: 'Main', color: '#F4A23C', persistent: true, createdAt: Date.now() },
     ];
-    changed = true;
+    dirty.push(profiles[0]);
   }
   for (const p of profiles) {
     if (p.persistent !== true) {
       p.persistent = true;
-      changed = true;
+      if (dirty.indexOf(p) < 0) dirty.push(p);
     }
   }
   if (!settings.defaultProfileId || !profiles.some(p => p.id === settings.defaultProfileId)) {
     settings.defaultProfileId = profiles[0].id;
     saveSettings();
   }
-  if (changed) saveProfiles();
+  // Push only the rows we actually changed, one at a time — never the whole table.
+  for (const p of dirty) upsertProfile({ id: p.id, name: p.name, color: p.color, persistent: true, createdAt: p.createdAt });
 }
 function makeProfile(name) {
   const id = 'p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
@@ -537,6 +852,8 @@ async function setTheme(themeId) {
 function applyLanguage() {
   i18n.setLang(settings.language || 'zh-CN');
   i18n.applyI18n();
+  paintLocalStrings();
+  repaintAllTabLabels();
   applyTheme();
   applyIdentity();
   renderGreeting();
@@ -545,6 +862,9 @@ function applyLanguage() {
   reRenderCurrent();
   updateAudioButtons();
   updateQuickNoteToggle();
+  // 焦点模式的按钮标题是 JS 写的，没有 data-i18n-title，换语言时要主动重绘一次。
+  if (window.XZFocus) XZFocus.onProfilesChanged();
+  document.dispatchEvent(new CustomEvent('xz:language'));
 }
 function applyIdentity() {
   const id = settings.identity || {};
@@ -565,6 +885,7 @@ function reRenderCurrent() {
   else if (currentRoute === 'windows') renderWindows();
   else if (currentRoute === 'profiles') renderProfiles();
   else if (currentRoute === 'accounts') renderAccounts();
+  else if (currentRoute === 'report') renderReport();
   else if (currentRoute === 'doctor') renderDoctor();
   else if (currentRoute === 'settings') renderSettings();
   else if (currentRoute === 'notes') renderNotes();
@@ -576,6 +897,12 @@ function reRenderCurrent() {
 // ---------- routing ----------
 function setRoute(name) {
   closeAnyMenus();
+  // The "recently used" view is a transient lens, not a saved preference.
+  if (name !== 'profiles' && currentRoute === 'profiles') {
+    profileOrderView = 'manual';
+    profileDragId = null;
+    profileRenderPending = false;
+  }
   currentRoute = name;
   document.querySelectorAll('.route').forEach(el => el.classList.toggle('active', el.id === 'route-' + name));
   document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.route === name));
@@ -591,18 +918,21 @@ function setRoute(name) {
   updateNavButtons();
   updateBookmarkStar();
   updateCompatUI();
+  refreshProfileChip();
   if (name === 'home') renderHome();
   else if (name === 'favorites') renderFavorites();
   else if (name === 'recent') renderRecent();
   else if (name === 'windows') renderWindows();
   else if (name === 'profiles') renderProfiles();
   else if (name === 'accounts') renderAccounts();
+  else if (name === 'report') renderReport();
   else if (name === 'doctor') renderDoctor();
   else if (name === 'settings') renderSettings();
   else if (name === 'notes') renderNotes();
   else if (name === 'tasks') renderTasks();
   else if (name === 'library') renderLibrary();
   if (name === 'browser' && measuring.active) setTimeout(resizeMeasureCanvas, 0);
+  document.dispatchEvent(new CustomEvent('xz:route', { detail: name }));
 }
 
 document.querySelectorAll('.nav-item').forEach(el => {
@@ -619,11 +949,32 @@ document.querySelectorAll('[data-open]').forEach(el => {
 function setSidebar(collapsed) {
   document.body.classList.toggle('sidebar-collapsed', !!collapsed);
 }
+// Glass blur pulls the game's compositing surface into a backdrop root that has
+// to be rasterised; on a Retina panel that can soften it. Sharpness wins, so
+// this defaults off and the user opts into the look.
+function setGlass(on) {
+  document.body.classList.toggle('glass-off', !on);
+}
 $('sidebar-toggle').addEventListener('click', () => {
   const now = !document.body.classList.contains('sidebar-collapsed');
   setSidebar(now);
 });
+// Game mode collapses the toolbar row entirely, so the tool cluster (speed, zoom,
+// game tools, the button that leaves game mode) is re-parented into the tab strip
+// first. Without this move those controls would vanish with the row.
+function parkToolCluster(inStrip) {
+  const zc = $('zc-tools');
+  const slot = $('zc-strip-slot');
+  const bar = $('topbar');
+  if (!zc || !slot || !bar) return;
+  if (zc.parentNode === (inStrip ? slot : bar)) return;
+  if (inStrip) slot.appendChild(zc);
+  // The chip lives in row 1 now, so the cluster simply goes back to the end
+  // of the toolbar rather than anchoring against it.
+  else bar.appendChild(zc);
+}
 function setGameMode(on) {
+  parkToolCluster(!!on);
   document.body.classList.toggle('game-mode', !!on);
   const btn = $('game-mode-btn');
   if (btn) btn.textContent = on ? '↙' : '⛶';
@@ -634,11 +985,206 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.body.classList.contains('game-mode')) setGameMode(false);
 });
 
+// ---------- usage sessions ----------
+// One session per (tab, host). In-site navigation must not churn sessions, or the
+// yearly report turns into thousands of one-second rows.
+const usageOrder = [];            // tabs with a live session, in begin order
+let usageResumeCursor = 0;
+let usageResumeAt = 0;
+function usageHost(url) {
+  try { return new URL(url).hostname || ''; } catch (e) { return ''; }
+}
+function forgetUsageTab(tab) {
+  const i = usageOrder.indexOf(tab);
+  if (i >= 0) usageOrder.splice(i, 1);
+}
+function endTabUsage(tab) {
+  if (!tab) return;
+  forgetUsageTab(tab);
+  const id = tab.usageSessionId;
+  tab.usageSessionId = null;
+  tab.usageHost = null;
+  tab.usagePending = null;
+  tab.usageToken = (tab.usageToken || 0) + 1;
+  if (id) ipcRenderer.invoke('usage:end', id).catch(() => {});
+}
+async function syncTabUsage(tab) {
+  if (!tab || tabs.indexOf(tab) < 0) return;
+  const host = usageHost(tab.url);
+  if (!host) return;
+  // Same site: keep the session. usagePending covers the window between asking main
+  // for an id and getting it back — did-navigate and did-stop-loading both land here
+  // for one page load, and a second begin would double every session count.
+  if (tab.usageHost === host && (tab.usageSessionId || tab.usagePending)) return;
+  const previous = tab.usageSessionId;
+  tab.usageSessionId = null;
+  tab.usageHost = host;
+  const token = (tab.usageToken || 0) + 1;
+  tab.usageToken = token;
+  tab.usagePending = token;
+  forgetUsageTab(tab);
+  if (previous) ipcRenderer.invoke('usage:end', previous).catch(() => {});
+  let id = null;
+  try {
+    id = await ipcRenderer.invoke('usage:begin', { profileId: tab.profileId, host });
+  } catch (e) {
+    if (tab.usagePending === token) tab.usagePending = null;
+    return;
+  }
+  if (tab.usagePending === token) tab.usagePending = null;
+  if (!id) return;
+  // The tab may have closed or moved on while we awaited: don't leak the session.
+  if (tabs.indexOf(tab) < 0 || tab.usageToken !== token) {
+    ipcRenderer.invoke('usage:end', id).catch(() => {});
+    return;
+  }
+  tab.usageSessionId = id;
+  usageOrder.push(tab);
+}
+// After a sleep main ends every session and hands back fresh ids on wake, one
+// 'usage:resumed' per session in the same order they were begun. Keeping the old
+// id would make every later usage:end a no-op.
+ipcRenderer.on('usage:resumed', (_e, sessionId) => {
+  if (!sessionId) return;
+  const now = Date.now();
+  if (now - usageResumeAt > 1500) usageResumeCursor = 0; // a new wake burst
+  usageResumeAt = now;
+  const live = usageOrder.filter(t => tabs.indexOf(t) >= 0);
+  const tab = live[usageResumeCursor++];
+  if (tab) tab.usageSessionId = sessionId;
+  else ipcRenderer.invoke('usage:end', sessionId).catch(() => {});
+});
+
+// ---------- window meta / ready handshake ----------
+let windowReadySent = false;
+let windowMetaTimer = null;
+// main's sequential opener blocks on this; without it every window burns the
+// full 20 s timeout and four accounts take a minute to appear.
+function signalWindowReady() {
+  if (windowReadySent) return;
+  windowReadySent = true;
+  ipcRenderer.invoke('window:ready').catch(() => {});
+}
+function sendWindowMetaNow() {
+  const t = activeTab();
+  const meta = {
+    title: t ? (t.title || hostOf(t.url) || '') : (document.title || ''),
+    url: t ? (t.url || '') : '',
+    profileId: windowProfileId || (t && t.profileId) || null,
+  };
+  if (window.XZSession) meta.session = XZSession.windowState();
+  ipcRenderer.invoke('window:set-meta', meta).catch(() => {});
+}
+function pushWindowMeta() {
+  if (windowMetaTimer) return;   // throttle: titles can update several times a second
+  windowMetaTimer = setTimeout(() => {
+    windowMetaTimer = null;
+    sendWindowMetaNow();
+  }, 300);
+}
+
+// ---------- tab labels ----------
+// Tabs read "<profile> | <page title>" so four windows of the same game stay tellable
+// apart at a glance. The visible text is clipped by CSS; the title attribute keeps the
+// full string for the hover tooltip.
+function tabProfile(tab) {
+  if (!tab || !tab.profileId) return null;
+  return profiles.find(x => x.id === tab.profileId) || null;
+}
+function tabProfileName(tab) {
+  const p = tabProfile(tab);
+  return p ? (p.name || '') : '';
+}
+function tabFullLabel(tab) {
+  if (!tab) return '';
+  const title = tab.title || hostOf(tab.url) || '';
+  const name = tabProfileName(tab);
+  return name ? (name + ' \uFF5C ' + title) : title;
+}
+function paintTabLabel(tab) {
+  if (!tab || !tab.stripEl) return;
+  const p = tabProfile(tab);
+  const name = p ? (p.name || '') : '';
+  const profEl = tab.stripEl.querySelector('.t-prof');
+  const sepEl = tab.stripEl.querySelector('.t-sep');
+  const titleEl = tab.stripEl.querySelector('.t-title');
+  const dotEl = tab.stripEl.querySelector('.pdot');
+  if (profEl) {
+    profEl.textContent = name;
+    profEl.style.display = name ? '' : 'none';
+    // The account colour is user data, not a theme colour: it has to survive theme swaps.
+    profEl.style.color = p && p.color ? p.color : '';
+  }
+  if (dotEl && p && p.color) dotEl.style.background = p.color;
+  tab.stripEl.style.setProperty('--acct', p && isHexColor(p.color) ? p.color : '');
+  if (sepEl) sepEl.style.display = name ? '' : 'none';
+  if (titleEl) titleEl.textContent = tab.title || hostOf(tab.url) || '';
+  tab.stripEl.title = tabFullLabel(tab);
+}
+function repaintAllTabLabels() { for (const t of tabs) paintTabLabel(t); }
+// The strip is always mounted now, so it needs its own empty state.
+function updateTabStripState() {
+  document.body.classList.toggle('no-tabs', tabs.length === 0);
+}
+
 // ---------- tab lifecycle ----------
-function createTab(url) {
+// ---------- new-window de-duplication ----------
+// One link click reaches this renderer twice: the <webview> element fires its own
+// 'new-window' DOM event, and main.js's guest listener preventDefault()s the same event
+// and forwards it as action:'new-tab'. Exactly one of the two may open a tab.
+// Each path leaves a ticket that only the *other* path consumes, so the order the two
+// messages arrive in does not matter, and two fast clicks on the same link still open
+// two tabs (each click leaves its own ticket). A path never eats its own tickets, so a
+// build where only one path fires keeps working; unpaired tickets simply expire.
+const NEW_WINDOW_TICKET_MS = 5000;
+const NEW_WINDOW_GRACE_MS = 150;   // how long the action path waits for the webview one
+const newWindowTickets = { link: [], action: [] };
+function claimNewWindow(from, url) {
+  const now = Date.now();
+  const mine = newWindowTickets[from === 'link' ? 'link' : 'action'];
+  const other = newWindowTickets[from === 'link' ? 'action' : 'link'];
+  for (const list of [mine, other]) {
+    while (list.length && now - list[0].at > NEW_WINDOW_TICKET_MS) list.shift();
+  }
+  const i = other.findIndex(t => t.url === url);
+  if (i >= 0) { other.splice(i, 1); return false; }   // the other path already opened it
+  mine.push({ url: url, at: now });
+  return true;
+}
+
+// Where a new tab's account comes from, highest priority first:
+//   1. an explicit profileId from the caller ("new tab in <account>")
+//   2. opts.sourceTab — the tab the link was clicked in. A link inside account A's game
+//      must stay on A, so this deliberately outranks the site rules.
+//   3. a site rule, and only for cold starts (address bar, bookmark, home, plain ⌘T)
+//   4. opts.fallbackProfileId — the tab the user was last looking at — then the window's
+//      own account.
+// Second argument stays back-compatible with the old createTab(url, profileId) callers.
+function resolveTabProfile(url, opts) {
+  const o = (typeof opts === 'string') ? { profileId: opts } : (opts || {});
+  // Exact lookup only: profileById() falls back to profiles[0], which would silently
+  // open the tab on the wrong account if the requested id no longer exists.
+  const exact = (id) => (id ? profiles.find(p => p.id === id) : null) || null;
+  const explicit = exact(o.profileId);
+  if (explicit) return { profile: explicit, reason: 'explicit' };
+  if (o.sourceTab) {
+    const inherited = exact(o.sourceTab.profileId);
+    if (inherited) return { profile: inherited, reason: 'inherit' };
+  } else {
+    const ruled = profileForUrl(url);
+    if (ruled) return { profile: ruled, reason: 'rule' };
+  }
+  const fallback = exact(o.fallbackProfileId);
+  if (fallback) return { profile: fallback, reason: 'fallback' };
+  return { profile: exact(windowProfileId) || defaultProfile(), reason: 'window' };
+}
+// Tabs default to the window's profile, but an explicit profileId opens the tab on a
+// different account: the partition is set per-<webview>, so one window can hold several.
+// A tab's profile is fixed at creation — switching it later would cross the sessions.
+function createTab(url, opts) {
   const id = nextId++;
-  // All tabs inherit this window's profile. To use a different profile, open a new window.
-  const profile = profileById(windowProfileId) || defaultProfile();
+  const picked = resolveTabProfile(url || homeUrl, opts);
+  const profile = picked.profile;
   const tab = {
     id, title: 'Loading…', url: url || homeUrl,
     loading: false, zoom: 1, fit: false,
@@ -648,8 +1194,20 @@ function createTab(url) {
     compatDismissed: false,
     profileId: profile ? profile.id : null,
     currentHost: null,
+    usageSessionId: null,
+    usageHost: null,
+    usagePending: null,
+    usageToken: 0,
   };
   tabs.push(tab);
+  // Count "opened this account" once per profile per window, not per navigation.
+  if (tab.profileId && !touchedProfileIds.has(tab.profileId)) {
+    touchedProfileIds.add(tab.profileId);
+    touchProfile(tab.profileId).then(() => {
+      refreshProfileChip();
+      if (currentRoute === 'profiles') renderProfiles();
+    });
+  }
 
   const stripEl = document.createElement('div');
   stripEl.className = 'tab';
@@ -657,18 +1215,24 @@ function createTab(url) {
   stripEl.innerHTML =
     '<span class="spinner"></span>' +
     '<span class="pdot" style="background:' + (profile ? profile.color : '#888') + '"></span>' +
+    '<span class="t-prof"></span>' +
+    '<span class="t-sep">\uFF5C</span>' +
     '<span class="t-title">Loading…</span>' +
     '<span class="detach" title="Move to new window">⧉</span>' +
     '<span class="close" title="Close">✕</span>';
   stripEl.addEventListener('mousedown', (e) => {
     if (e.target.classList.contains('close') || e.target.classList.contains('detach')) return;
     if (e.button === 1) { closeTab(id); return; }
+    // activateTab() switches the route itself — that round trip through Home was
+    // the whole complaint.
     activateTab(id);
   });
   stripEl.querySelector('.close').addEventListener('click', (e) => { e.stopPropagation(); closeTab(id); });
   stripEl.querySelector('.detach').addEventListener('click', (e) => { e.stopPropagation(); detachTab(id); });
   $tabList.appendChild(stripEl);
   tab.stripEl = stripEl;
+  paintTabLabel(tab);
+  updateTabStripState();
 
   const wv = document.createElement('webview');
   wv.setAttribute('plugins', '');
@@ -685,11 +1249,22 @@ function createTab(url) {
   applyAudioMute(tab);
   wv.addEventListener('focus', closeAnyMenus);
 
+  // A link in the page asks for a new window. main.js forwards the same click as
+  // action:'new-tab', but only this listener knows which tab it came from — this is the
+  // path that carries the account across, so it hands createTab() the source tab.
+  wv.addEventListener('new-window', (e) => {
+    const target = e && e.url;
+    if (!target) return;
+    if (!claimNewWindow('link', target)) return;
+    createTab(target, { sourceTab: tab });
+  });
+
   const applyZoom = () => {
     try {
       if (tab.fit) {
-        const w = wv.getBoundingClientRect().width || window.innerWidth;
+        const w = wv.offsetWidth || wv.getBoundingClientRect().width || window.innerWidth;
         tab.zoom = Math.max(0.4, Math.min(3, w / 960));
+        if (window.XZScale) tab.zoom = XZScale.quantize(tab, tab.zoom, 0);
       }
       wv.setZoomFactor(tab.zoom);
       if (id === activeId) updateZoomIndicator();
@@ -707,7 +1282,14 @@ function createTab(url) {
       updateCompatUI();
     }
   });
-  wv.addEventListener('did-stop-loading', () => { tab.loading = false; stripEl.classList.remove('loading'); if (id === activeId) updateNavButtons(); });
+  wv.addEventListener('did-stop-loading', () => {
+    tab.loading = false;
+    stripEl.classList.remove('loading');
+    if (id === activeId) updateNavButtons();
+    signalWindowReady();     // the game webview is up: release main's open queue
+    syncTabUsage(tab);
+    pushWindowMeta();
+  });
   wv.addEventListener('dom-ready', () => {
     tab.ready = true;
     applyZoom();
@@ -715,17 +1297,20 @@ function createTab(url) {
   });
   wv.addEventListener('page-title-updated', (e) => {
     tab.title = e.title || hostOf(tab.url);
-    stripEl.querySelector('.t-title').textContent = tab.title;
-    stripEl.title = tab.title;
+    paintTabLabel(tab);
     if (currentRoute === 'windows') renderWindows();
+    if (id === activeId) pushWindowMeta();
   });
   wv.addEventListener('did-navigate', (e) => {
     tab.url = e.url;
     if (id === activeId) $topUrl.value = e.url;
+    paintTabLabel(tab);   // keeps the hover tooltip in step when only the host changed
     recordHistory(tab);
     updateNavButtons();
     updateBookmarkStar();
     if (currentRoute === 'windows') renderWindows();
+    syncTabUsage(tab);   // no-op unless the host actually changed
+    if (id === activeId) pushWindowMeta();
   });
   wv.addEventListener('did-navigate-in-page', (e) => {
     tab.url = e.url;
@@ -733,6 +1318,7 @@ function createTab(url) {
     recordHistory(tab);
     updateNavButtons();
     updateBookmarkStar();
+    if (id === activeId) pushWindowMeta();
   });
   // Password autofill + save pipeline (via webview preload IPC).
   wv.addEventListener('ipc-message', (e) => {
@@ -753,6 +1339,7 @@ function createTab(url) {
         } else if (matches.length > 1 && id === activeId) {
           showAccountPicker(tab, host, matches);
         }
+        if (window.XZAutoLogin) XZAutoLogin.onLoginForm(tab, host, matches);
       } else if (e.channel === 'pw:submit') {
         const host = payload.host || tab.currentHost || hostOf(tab.url);
         const username = payload.username || '';
@@ -780,8 +1367,16 @@ function createTab(url) {
     } catch (err) {}
   });
 
+  // Give the new webview its slot geometry before it is shown, or it flashes full-screen for a frame.
+  document.dispatchEvent(new CustomEvent('xz:tab-created', { detail: tab }));
+  if (window.XZFocus) XZFocus.onTabCreated(tab);
   activateTab(id);
   setRoute('browser');
+  // A rule quietly switched accounts on the user; say so, or the chip changing name
+  // looks like a bug.
+  if (picked.reason === 'rule' && profile) {
+    showToast(tOr('sites.opened_with', '\u5df2\u7528 {name} \u8d26\u53f7\u6253\u5f00').replace('{name}', profile.name || ''));
+  }
   return tab;
 }
 
@@ -793,13 +1388,20 @@ function activateTab(id) {
     t.stripEl.classList.toggle('active', t.id === id);
     t.webview.classList.toggle('active', t.id === id);
   });
+  // The strip is global: picking a tab from Profiles/Settings/Notes has to land on the
+  // page itself. activeId is set first so setRoute() reads the right tab for the URL bar.
+  if (currentRoute !== 'browser') setRoute('browser');
   if (currentRoute === 'browser') $topUrl.value = tab.url;
   updateNavButtons();
   updateBookmarkStar();
   updateZoomIndicator();
+  refreshProfileChip();
   updateAccountIndicator();
   updateAudioButtons();
   updateCompatUI();
+  pushWindowMeta();
+  if (window.XZFocus) XZFocus.onActivated(tab);
+  document.dispatchEvent(new CustomEvent('xz:activated', { detail: tab }));
 }
 
 function closeTab(id) {
@@ -809,14 +1411,20 @@ function closeTab(id) {
   tab.stripEl.remove();
   tab.webview.remove();
   tabs.splice(idx, 1);
+  endTabUsage(tab);
+  updateTabStripState();
+  if (window.XZFocus) XZFocus.onTabClosed(tab);
+  document.dispatchEvent(new CustomEvent('xz:tab-closed', { detail: tab }));
   if (tabs.length === 0) {
     activeId = null;
     updateAudioButtons();
     updateCompatUI();
     setRoute('home');
+    pushWindowMeta();
     return;
   }
-  if (activeId === id) activateTab(tabs[Math.min(idx, tabs.length - 1)].id);
+  if (activeId === id) activateTab((window.XZFocus && XZFocus.pickAfterClose(idx)) || tabs[Math.min(idx, tabs.length - 1)].id);
+  else pushWindowMeta();
   if (currentRoute === 'windows') renderWindows();
 }
 
@@ -829,11 +1437,32 @@ async function detachTab(id) {
 
 function activeTab() { return tabs.find(t => t.id === activeId); }
 
-function openUrl(url) {
-  if (currentRoute === 'browser' && activeTab()) {
-    activeTab().webview.loadURL(url);
+// Reorder a tab inside this window. The strip DOM and `tabs` must stay in the
+// same order: Cmd+Alt+Arrow walks the array.
+function moveTab(id, toIndex) {
+  const from = tabs.findIndex(t => t.id === id);
+  if (from < 0) return;
+  const [t] = tabs.splice(from, 1);
+  const to = Math.max(0, Math.min(tabs.length, toIndex));
+  tabs.splice(to, 0, t);
+  const next = tabs[to + 1];
+  $tabList.insertBefore(t.stripEl, next ? next.stripEl : null);
+  pushWindowMeta();              // 顺序变了，主进程那边的窗口元数据要跟上
+  if (window.XZFocus) XZFocus.onTabsChanged();
+  document.dispatchEvent(new CustomEvent('xz:tabs-changed'));
+}
+
+function openUrl(url, opts) {
+  const t = activeTab();
+  if (currentRoute === 'browser' && t) {
+    // Same webview, same partition: navigating here cannot change the account.
+    t.webview.loadURL(url);
   } else {
-    createTab(url);
+    // A cold start: site rules get to decide, and when no rule claims the host the tab
+    // follows whichever tab the user was last looking at instead of snapping back to
+    // the window's own account.
+    const o = (typeof opts === 'string') ? { profileId: opts } : (opts || {});
+    createTab(url, Object.assign({ fallbackProfileId: t ? t.profileId : null }, o));
   }
 }
 
@@ -863,6 +1492,7 @@ function updateZoomIndicator() {
   const pct = Math.round((t.zoom || 1) * 100);
   $zoomInd.textContent = t.fit ? ('⤢ ' + pct + '%') : (pct + '% ▾');
   $zoomInd.title = t.fit ? i18n.t('zoom.auto') : '';
+  if (window.XZScale) XZScale.paintIndicator(t, $zoomInd);
 }
 
 function speedProfileCode() {
@@ -871,6 +1501,7 @@ function speedProfileCode() {
 }
 
 function effectiveMuted(tab) {
+  if (window.XZFocus && XZFocus.forcesMute(tab)) return true;
   return !!settings.globalMuted || !!(tab && tab.muted);
 }
 function applyAudioMute(tab) {
@@ -1275,12 +1906,20 @@ function captureWebview(tab) {
     }
   });
 }
+// Announced with a toast, never a modal: a dialog steals focus from the Flash
+// plugin, and the game suspends itself the moment focus leaves it. The whole
+// point of the shortcut is to grab a frame mid-battle without touching anything.
 async function screenshotCurrentGame() {
   const tab = activeTab();
   if (!tab) return;
-  const image = await captureWebview(tab);
-  const saved = await ipcRenderer.invoke('screenshot:save', image.toPNG(), tab.title || hostOf(tab.url));
-  if (saved && saved.path) alert(i18n.t('tools.screenshot_saved').replace('{path}', saved.path));
+  try {
+    const image = await captureWebview(tab);
+    const saved = await ipcRenderer.invoke('screenshot:save', image.toPNG(), tab.title || hostOf(tab.url));
+    if (saved && saved.path) showToast(tOr('tools.screenshot_toast', '截图已保存到桌面'));
+    else showToast(tOr('tools.screenshot_failed', '截图失败'));
+  } catch (e) {
+    showToast(tOr('tools.screenshot_failed', '截图失败'));
+  }
 }
 function openUrlInProfiles(url, grid, profileIds) {
   const ids = (profileIds && profileIds.length ? profileIds : profiles.map(p => p.id));
@@ -1362,8 +2001,16 @@ function showGameToolsMenu(anchor) {
   addToolAction(menu, 'tools.repair_page', resetDoctorTab, !!tab);
   addToolAction(menu, 'tools.screenshot', screenshotCurrentGame, !!tab);
   addToolAction(menu, 'tools.multi_open', showProfileOpenModal, !!tab);
+  addToolAction(menu, 'scatter.menu', scatterTabsAndTile, tabs.length > 1);
+  if (window.XZFocus) addToolToggle(menu, 'tools.focus_mode', XZFocus.isActive(), () => XZFocus.toggle(), tabs.length > 0);
+  if (window.XZPalette) addToolAction(menu, 'tools.palette', () => XZPalette.open());
+  if (window.XZStatus) addToolToggle(menu, 'tools.status_bar', XZStatus.isVisible(), () => XZStatus.toggle());
+  if (window.XZCleanup) XZCleanup.addMenuItem(menu, tab, addToolAction);
   addToolToggle(menu, 'tools.measure_overlay', measuring.active, toggleMeasureOverlay, !!tab);
   addToolAction(menu, 'tools.measure_scale', startScaleCalibration, !!tab);
+  addToolToggle(menu, 'tools.aim_assist',
+    !!(window.AimAssist && window.AimAssist.isVisible()),
+    () => { if (window.AimAssist) window.AimAssist.toggle(); }, !!tab);
   addToolDivider(menu);
   addToolToggle(menu, 'tools.quick_note', settings.showQuickNote !== false, () => setQuickNoteVisible(settings.showQuickNote === false));
   addToolToggle(menu, 'tools.global_mute', !!settings.globalMuted, () => setGlobalMuted(!settings.globalMuted));
@@ -1393,6 +2040,7 @@ $('zoom-indicator').addEventListener('click', (ev) => {
       ev.stopPropagation();
       t.fit = false;
       t.zoom = p / 100;
+      if (window.XZScale) XZScale.setOn(t, false, true);
       try { t.webview.setZoomFactor(t.zoom); } catch (e) {}
       updateZoomIndicator();
       closeAnyMenus();
@@ -1414,6 +2062,7 @@ $('zoom-indicator').addEventListener('click', (ev) => {
     closeAnyMenus();
   });
   menu.appendChild(fitItem);
+  if (window.XZScale) XZScale.addMenuItem(menu, t);
   // Custom
   const customItem = document.createElement('div');
   customItem.className = 'menu-item';
@@ -1428,6 +2077,7 @@ $('zoom-indicator').addEventListener('click', (ev) => {
     if (isNaN(n) || n < 25 || n > 500) return;
     t.fit = false;
     t.zoom = n / 100;
+    if (window.XZScale) XZScale.setOn(t, false, true);
     try { t.webview.setZoomFactor(t.zoom); } catch (e) {}
     updateZoomIndicator();
   });
@@ -1436,10 +2086,26 @@ $('zoom-indicator').addEventListener('click', (ev) => {
   armMenuClose();
 });
 function refreshProfileChip() {
-  const p = profileById(windowProfileId) || defaultProfile();
+  // A window can now hold tabs from several accounts, so on the browser view the chip
+  // follows the tab you are looking at; elsewhere it shows the window's own account.
+  const t = currentRoute === 'browser' ? activeTab() : null;
+  const p = (t && profiles.find(x => x.id === t.profileId)) || profileById(windowProfileId) || defaultProfile();
   if (!p) return;
-  $('profile-chip').querySelector('.dot').style.background = p.color;
+  const chip = $('profile-chip');
+  chip.querySelector('.dot').style.background = p.color;
   $('profile-chip-name').textContent = p.name;
+  // A tab running someone else's account is exactly what the user needs to be sure of,
+  // so the chip is marked: without it the name silently changes and looks like a bug.
+  const guest = !!(windowProfileId && p.id !== windowProfileId);
+  chip.classList.toggle('guest', guest);
+  const badge = $('profile-chip-guest');
+  if (badge) {
+    badge.textContent = guest ? tOr('sites.guest_badge', '\u5ba2\u4eba') : '';
+    badge.style.display = guest ? '' : 'none';
+  }
+  chip.title = guest
+    ? tOr('sites.guest_tip', '\u8fd9\u4e2a\u6807\u7b7e\u7528\u7684\u662f\u522b\u7684\u8d26\u53f7\uff0c\u4e0d\u662f\u672c\u7a97\u53e3\u7684\u9ed8\u8ba4\u8d26\u53f7')
+    : (i18n.t('topbar.profile_tip') || '');
 }
 
 $back.addEventListener('click', () => {
@@ -1454,7 +2120,319 @@ $forward.addEventListener('click', () => {
 });
 $reload.addEventListener('click', () => { const t = activeTab(); if (t && t.ready) { try { t.webview.reload(); } catch (e) {} } });
 $('go-home').addEventListener('click', () => setRoute('home'));
-$('new-tab-btn').addEventListener('click', () => createTab(homeUrl));
+
+// The "+" is a segmented button: the left half opens a tab on this window's account,
+// the right half (>= 26px, full height) picks another account. Holding the left half
+// for 400ms, or right-clicking anywhere on it, opens the same account menu -- the
+// caret used to be a few pixels wide and nearly impossible to hit.
+const NEW_TAB_HOLD_MS = 400;
+const $newTabGroup = $('new-tab-group');
+const $newTabMain = $('new-tab-btn');
+const $newTabCaret = $('new-tab-caret');
+let newTabHoldTimer = null;
+let newTabHoldFired = false;
+
+function cancelNewTabHold() {
+  if (newTabHoldTimer) { clearTimeout(newTabHoldTimer); newTabHoldTimer = null; }
+  if ($newTabGroup) $newTabGroup.classList.remove('pressing');
+}
+if ($newTabMain) {
+  $newTabMain.addEventListener('mousedown', (ev) => {
+    if (ev.button !== 0) return;
+    newTabHoldFired = false;
+    $newTabGroup.classList.add('pressing');
+    newTabHoldTimer = setTimeout(() => {
+      newTabHoldTimer = null;
+      newTabHoldFired = true;
+      cancelNewTabHold();
+      showNewTabProfileMenu($newTabGroup);
+    }, NEW_TAB_HOLD_MS);
+  });
+  $newTabMain.addEventListener('mouseup', cancelNewTabHold);
+  $newTabMain.addEventListener('mouseleave', cancelNewTabHold);
+  $newTabMain.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    cancelNewTabHold();
+    // The long press already opened the menu; do not also spawn a tab.
+    if (newTabHoldFired) { newTabHoldFired = false; return; }
+    createTab(newTabUrl());
+  });
+}
+if ($newTabCaret) {
+  $newTabCaret.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    showNewTabProfileMenu($newTabGroup);
+  });
+}
+if ($newTabGroup) {
+  $newTabGroup.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    cancelNewTabHold();
+    newTabHoldFired = false;
+    showNewTabProfileMenu($newTabGroup);
+  });
+}
+
+// Drop a menu under its button, left-aligned, flipping to right-aligned when it would
+// run past the window edge. Measured after insertion because the width is content-driven.
+function placeMenuUnder(menu, anchor) {
+  const rect = anchor.getBoundingClientRect();
+  menu.style.top = (rect.bottom + 4) + 'px';
+  menu.style.left = rect.left + 'px';
+  document.body.appendChild(menu);
+  const width = menu.offsetWidth;
+  const margin = 8;
+  if (rect.left + width > window.innerWidth - margin) {
+    menu.style.left = Math.max(margin, Math.min(rect.right - width, window.innerWidth - margin - width)) + 'px';
+  }
+  const height = menu.offsetHeight;
+  if (rect.bottom + 4 + height > window.innerHeight - margin) {
+    menu.style.top = Math.max(margin, window.innerHeight - margin - height) + 'px';
+  }
+}
+
+function showNewTabProfileMenu(anchor) {
+  closeAnyMenus();
+  const menu = document.createElement('div');
+  menu.className = 'menu profile-menu';
+  const head = document.createElement('div');
+  head.className = 'menu-head';
+  head.textContent = tOr('tabs.new_in_profile', '\u7528\u54ea\u4e2a\u8d26\u53f7\u65b0\u5efa\u6807\u7b7e');
+  menu.appendChild(head);
+  for (const p of profiles) {
+    const it = document.createElement('div');
+    it.className = 'menu-item' + (p.id === windowProfileId ? ' check' : '');
+    it.innerHTML = '<span class="dot" style="background:' + (p.color || 'var(--main-orange)') + '"></span>' + escapeHtml(p.name || '');
+    it.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      closeAnyMenus();
+      createTab(newTabUrl(), p.id);
+    });
+    menu.appendChild(it);
+  }
+  placeMenuUnder(menu, anchor || $newTabGroup);
+  if ($newTabGroup) $newTabGroup.classList.add('menu-open');
+  armMenuClose();
+}
+
+// "Hand this site to <account>": one click turns the page you are on into a rule.
+function showAssignSiteMenu(anchor, host) {
+  closeAnyMenus();
+  const rule = normalizeSiteRule(host);
+  if (!rule) return;
+  const rect = anchor.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'menu';
+  menu.style.top = (rect.bottom + 4) + 'px';
+  menu.style.right = (window.innerWidth - rect.right) + 'px';
+  menu.style.minWidth = '220px';
+  const head = document.createElement('div');
+  head.className = 'menu-item';
+  head.style.cssText = 'color: var(--text-secondary); font-size: 11px; pointer-events: none;';
+  head.textContent = tOr('sites.assign_head', '\u628a {host} \u4ea4\u7ed9\u54ea\u4e2a\u8d26\u53f7').replace('{host}', rule);
+  menu.appendChild(head);
+  const owner = profileForUrl('http://' + rule);
+  for (const p of profiles) {
+    const it = document.createElement('div');
+    it.className = 'menu-item' + (owner && owner.id === p.id ? ' check' : '');
+    it.innerHTML = '<span class="dot" style="background:' + (p.color || 'var(--main-orange)') + '"></span>' + escapeHtml(p.name || '');
+    it.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      closeAnyMenus();
+      assignSiteToProfile(rule, p.id);
+    });
+    menu.appendChild(it);
+  }
+  // The way back out. Without it, the only exit from a mis-click was to hunt the
+  // host down in whichever account's rule box it landed in.
+  const sep = document.createElement('div');
+  sep.className = 'menu-sep';
+  menu.appendChild(sep);
+  const none = document.createElement('div');
+  none.className = 'menu-item' + (owner ? '' : ' check');
+  none.textContent = tOr('sites.assign_none', '\u4e0d\u6307\u5b9a\uff08\u8ddf\u968f\u5f53\u524d\u7a97\u53e3\uff09');
+  if (!owner) none.style.opacity = '0.55';
+  none.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    closeAnyMenus();
+    if (owner) unassignSite(rule);
+  });
+  menu.appendChild(none);
+  document.body.appendChild(menu);
+  armMenuClose();
+}
+
+// ---------- window management (main owns the geometry; we only drive it) ----------
+let toastTimer = null;
+// Never alert(): a modal in a multi-window setup steals focus from the game.
+function showToast(text, action) {
+  const el = $('toast');
+  if (!el || !text) return;
+  el.textContent = '';
+  const label = document.createElement('span');
+  label.textContent = text;
+  el.appendChild(label);
+  // An action gives the toast a job beyond announcing: anything destructive or
+  // hard to reverse by hand hands the user the way back here, while the thing
+  // that just happened is still on screen.
+  let life = 2200;
+  if (action && typeof action.onClick === 'function') {
+    const btn = document.createElement('button');
+    btn.className = 'toast-action';
+    btn.textContent = action.label;
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      hideToast();
+      try { action.onClick(); } catch (e) {}
+    });
+    el.appendChild(btn);
+    life = 6000; // long enough to read, decide and reach for it
+  }
+  el.classList.add('visible');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, life);
+}
+function hideToast() {
+  const el = $('toast');
+  if (el) el.classList.remove('visible');
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+}
+function flashButton(el) {
+  if (!el) return;
+  el.classList.add('ok');
+  setTimeout(() => el.classList.remove('ok'), 420);
+}
+function layoutHasTile(snapshot) {
+  const last = snapshot && snapshot.lastTile;
+  return !!(last && last.bounds && Object.keys(last.bounds).length);
+}
+// "Restore layout" is meaningless until something has been tiled once.
+function refreshLayoutButtons() {
+  return ipcRenderer.invoke('layouts:get').then((snap) => {
+    const has = layoutHasTile(snap);
+    const strip = $('strip-restore-tile');
+    const home = $('act-restore-tile');
+    if (strip) strip.classList.toggle('disabled', !has);
+    if (home) home.disabled = !has;
+    const forget = $('setting-forget-layouts');
+    if (forget) forget.disabled = !has && !(snap && snap.byProfile && Object.keys(snap.byProfile).length);
+    return has;
+  }).catch(() => false);
+}
+function fillCount(key, fallback, n) {
+  return tOr(key, fallback).replace('{n}', String(n));
+}
+// All four IPCs take no arguments: main resolves the calling window itself, which is
+// exactly why the old renderer-side "find the focused window" park path kept missing.
+function runWindowAction(kind, btn) {
+  let job;
+  if (kind === 'tile') job = ipcRenderer.invoke('windows:tile').then((r) => {
+    const n = (r && r.tiled) || 0;
+    return n ? fillCount('layout.tiled_toast', '\u5df2\u5e73\u94fa {n} \u4e2a\u7a97\u53e3', n)
+             : tOr('layout.nothing', '\u6ca1\u6709\u53ef\u64cd\u4f5c\u7684\u7a97\u53e3');
+  });
+  else if (kind === 'restore') job = ipcRenderer.invoke('windows:restore-tile').then((r) => {
+    if (!r || !r.hasLayout) return tOr('layout.no_layout', '\u8fd8\u6ca1\u6709\u8bb0\u4f4f\u7684\u5e03\u5c40');
+    return fillCount('layout.restored_toast', '\u5df2\u6062\u590d {n} \u4e2a\u7a97\u53e3', r.restored || 0);
+  });
+  else if (kind === 'park') job = ipcRenderer.invoke('windows:park-others').then((n) => (
+    n ? fillCount('layout.parked_toast', '\u5df2\u6302\u8d77 {n} \u4e2a\u7a97\u53e3', n)
+      : tOr('layout.nothing', '\u6ca1\u6709\u53ef\u64cd\u4f5c\u7684\u7a97\u53e3')
+  ));
+  else if (kind === 'unpark') job = ipcRenderer.invoke('windows:unpark-all').then((n) => (
+    n ? fillCount('layout.unparked_toast', '\u5df2\u8fd8\u539f {n} \u4e2a\u7a97\u53e3', n)
+      : tOr('layout.nothing', '\u6ca1\u6709\u53ef\u64cd\u4f5c\u7684\u7a97\u53e3')
+  ));
+  else return;
+  flashButton(btn);
+  job.then((msg) => { showToast(msg); refreshLayoutButtons(); })
+     .catch(() => showToast(tOr('layout.failed', '\u64cd\u4f5c\u672a\u5b8c\u6210')));
+}
+// 散开到多窗口并平铺：one click to break this window's other tabs out into
+// windows of their own, then tile everything. detachTab() reopens the page in a new
+// window, so every account it moves reloads and loses whatever match it was in — that is
+// why this asks first and why the menu item carries no accelerator.
+const SCATTER_INTERVAL_MS = 700;   // same cadence as the focus-mode multi-open
+async function scatterTabsAndTile() {
+  const keep = activeTab();
+  // Snapshot the ids up front: detachTab() splices `tabs` while we walk it.
+  const moving = tabs.filter(t => !keep || t.id !== keep.id).map(t => t.id);
+  // tabs.length guard: with a stale activeId `keep` is null and `moving` would hold the
+  // only tab, leaving this window empty.
+  if (tabs.length < 2 || !moving.length) {
+    showToast(tOr('scatter.empty', '这个窗口只有一个标签页，没有可散开的'));
+    return;
+  }
+  const ask = fillCount('scatter.confirm',
+    '把这个窗口里另外 {n} 个标签页各自移到新窗口，然后平铺所有窗口？\n\n移动时页面会重新加载，这些账号正在打的那一局会被打断。',
+    moving.length);
+  if (!confirm(ask)) return;
+  showToast(fillCount('scatter.working', '正在散开 {n} 个标签页，每 0.7 秒一个…', moving.length));
+  for (let i = 0; i < moving.length; i++) {
+    if (i) await new Promise(r => setTimeout(r, SCATTER_INTERVAL_MS));
+    try { await detachTab(moving[i]); } catch (e) {}
+  }
+  // One more beat so the last window has painted before main measures the screen.
+  await new Promise(r => setTimeout(r, SCATTER_INTERVAL_MS));
+  runWindowAction('tile', null);
+}
+function wireWindowAction(id, kind) {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener('click', () => {
+    if (el.classList.contains('disabled') || el.disabled) return;
+    runWindowAction(kind, el);
+  });
+}
+wireWindowAction('strip-tile', 'tile');
+wireWindowAction('strip-restore-tile', 'restore');
+wireWindowAction('strip-park-others', 'park');
+wireWindowAction('strip-unpark-all', 'unpark');
+wireWindowAction('act-tile', 'tile');
+wireWindowAction('act-restore-tile', 'restore');
+wireWindowAction('act-park-others', 'park');
+wireWindowAction('act-unpark-all', 'unpark');
+$('setting-forget-layouts').addEventListener('click', () => {
+  ipcRenderer.invoke('layouts:forget')
+    .then(() => { showToast(tOr('layout.forgotten_toast', '\u5df2\u5fd8\u8bb0\u8bb0\u4f4f\u7684\u7a97\u53e3\u5e03\u5c40')); refreshLayoutButtons(); })
+    .catch(() => {});
+});
+
+// Strings the dictionary does not carry yet: painted through tOr() so they light up
+// on their own once the keys land, instead of showing a raw key like "layout.tile".
+function paintLocalStrings() {
+  const set = (id, text, tip) => {
+    const el = $(id);
+    if (!el) return;
+    if (text != null) el.textContent = text;
+    if (tip != null) el.title = tip;
+  };
+  const tile = tOr('layout.tile', '\u5e73\u94fa\u7a97\u53e3');
+  const restore = tOr('layout.restore', '\u6062\u590d\u5e03\u5c40');
+  const park = tOr('bar.park_others', '\u6302\u8d77\u5176\u5b83\u8d26\u53f7');
+  const unpark = tOr('layout.unpark_all', '\u5168\u90e8\u8fd8\u539f');
+  set('act-tile', tile); set('act-restore-tile', restore);
+  set('act-park-others', park); set('act-unpark-all', unpark);
+  // Icon buttons keep the words in the tooltip.
+  set('strip-tile', null, tile);
+  set('strip-restore-tile', null, restore);
+  set('strip-park-others', null, park);
+  set('strip-unpark-all', null, unpark);
+  const newTab = $('new-tab-btn');
+  // Own key, not tabs.new_tip: the tooltip has to advertise the long press, and the
+  // fallback keeps saying so until the dictionary carries it.
+  if (newTab) newTab.title = tOr('tabs.new_tip_hold', '\u65b0\u5efa\u6807\u7b7e\u9875 \u2318T\uff0c\u957f\u6309\u9009\u8d26\u53f7');
+  const caret = $('new-tab-caret');
+  if (caret) caret.title = tOr('tabs.new_in_profile', '\u7528\u54ea\u4e2a\u8d26\u53f7\u65b0\u5efa\u6807\u7b7e');
+  const empty = document.querySelector('#tab-strip .tab-empty');
+  if (empty) empty.textContent = tOr('tabs.empty_hint', '\u8fd8\u6ca1\u6709\u6807\u7b7e\u9875\uff0c\u70b9 + \u5f00\u59cb');
+  set('set-layout-title', tOr('layout.group', '\u7a97\u53e3\u5e03\u5c40'));
+  set('set-forget-layouts-label', tOr('layout.forget', '\u5fd8\u8bb0\u8bb0\u4f4f\u7684\u7a97\u53e3\u5e03\u5c40'));
+  set('set-forget-layouts-sub', tOr('layout.forget_desc', '\u6e05\u9664\u5e73\u94fa\u65f6\u8bb0\u4f4f\u7684\u7a97\u53e3\u4f4d\u7f6e'));
+  set('setting-forget-layouts', tOr('layout.forget_btn', '\u5fd8\u8bb0'));
+  paintReportStrings();
+}
 
 $topUrl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
@@ -1482,7 +2460,6 @@ $bmStar.addEventListener('click', () => {
 
 // Profile chip click opens the ⋯ menu as a shortcut (same entries).
 $('profile-chip').addEventListener('click', (ev) => { ev.stopPropagation(); showMoreMenu(ev.currentTarget); });
-$('more-btn').addEventListener('click', (ev) => { ev.stopPropagation(); showMoreMenu(ev.currentTarget); });
 
 function showMoreMenu(anchor) {
   closeAnyMenus();
@@ -1492,14 +2469,27 @@ function showMoreMenu(anchor) {
   menu.style.top = (rect.bottom + 4) + 'px';
   menu.style.right = (window.innerWidth - rect.right) + 'px';
   menu.style.minWidth = '220px';
+  // opts.state / opts.stateFor are optional. Only the profile rows pass them, so
+  // every other caller keeps exactly the markup it had: no state light, no title.
   const addItem = (label, opts) => {
     const it = document.createElement('div');
     it.className = 'menu-item' + (opts && opts.check ? ' check' : '');
-    if (opts && opts.dot) {
-      it.innerHTML = '<span class="dot" style="background:' + opts.dot + '"></span>' + escapeHtml(label);
+    const state = opts && opts.state;
+    if (state || (opts && opts.dot)) {
+      let html = '';
+      // Two different things, in reading order: the day light ("did I open this
+      // today?") then the account colour dot ("which account is this?").
+      if (state) {
+        html += '<span class="pc-dot ' + state + '" data-day-state="' + state + '"' +
+          (opts.stateFor ? ' data-state-for="' + escapeHtml(opts.stateFor) + '"' : '') +
+          ' style="' + dayStateDotStyle(state) + '"></span>';
+      }
+      if (opts.dot) html += '<span class="dot" style="background:' + opts.dot + '"></span>';
+      it.innerHTML = html + escapeHtml(label);
     } else {
       it.textContent = label;
     }
+    if (opts && opts.title) it.title = opts.title;
     it.addEventListener('click', (ev) => { ev.stopPropagation(); closeAnyMenus(); if (opts && opts.onClick) opts.onClick(); });
     menu.appendChild(it);
   };
@@ -1511,10 +2501,21 @@ function showMoreMenu(anchor) {
   // New window in each profile
   for (const p of profiles) {
     const label = i18n.t('more.new_window_in').replace('{name}', p.name);
-    addItem(label, { dot: p.color, check: p.id === windowProfileId, onClick: () => ipcRenderer.invoke('window:open', null, p.id) });
+    const state = profileDayState(p);
+    addItem(label, {
+      dot: p.color, state: state, stateFor: p.id, title: profileDayStateLabel(state),
+      check: p.id === windowProfileId, onClick: () => ipcRenderer.invoke('window:open', (window.XZAutoLogin && XZAutoLogin.quickUrlFor(p.id)) || null, p.id),
+    });
   }
   addDivider();
   addItem(i18n.t('more.add_current_to_library'), { onClick: () => { const t = activeTab(); if (t) addToLibrary(t.url, t.title); } });
+  // The handiest place to build a site rule is the page it is about.
+  const siteTab = currentRoute === 'browser' ? activeTab() : null;
+  const siteHost = siteTab ? normalizeSiteRule(siteHostOf(siteTab.url)) : '';
+  if (siteHost) {
+    addItem(tOr('sites.assign_current', '\u628a\u5f53\u524d\u7f51\u7ad9\u4ea4\u7ed9\u2026').replace('{host}', siteHost),
+      { onClick: () => showAssignSiteMenu(anchor, siteHost) });
+  }
   addItem(i18n.t('more.open_all_profiles'), { onClick: showProfileOpenModal });
   addItem(i18n.t('more.manage_profiles'), { onClick: () => setRoute('profiles') });
   addItem(i18n.t('more.appearance'),      { onClick: () => { appearanceExpanded = true; setRoute('settings'); setTimeout(() => $('theme-grid') && $('theme-grid').scrollIntoView({ block: 'start' }), 0); } });
@@ -1523,6 +2524,10 @@ function showMoreMenu(anchor) {
   addItem(i18n.t('more.about'),           { onClick: () => setRoute('about') });
   document.body.appendChild(menu);
   armMenuClose();
+  // Built from the cached set so the menu paints instantly; this pulls the
+  // authoritative list and repaintMenuDayStates() fixes the lights in place if it
+  // moved on (windows:changed keeps the cache warm the rest of the time).
+  refreshRunningProfiles();
 }
 function armMenuClose() {
   if (menuCloseHandler) {
@@ -1543,6 +2548,8 @@ function armMenuClose() {
 }
 function closeAnyMenus() {
   document.querySelectorAll('.menu').forEach(m => m.remove());
+  const seg = document.getElementById('new-tab-group');
+  if (seg) seg.classList.remove('menu-open', 'pressing');
   if (menuCloseHandler) {
     document.removeEventListener('mousedown', menuCloseHandler, true);
     document.removeEventListener('keydown', menuCloseHandler, true);
@@ -1556,7 +2563,7 @@ function bumpZoom(delta) {
   const t = activeTab();
   if (!t) return;
   t.fit = false;
-  t.zoom = Math.max(0.4, Math.min(3, (t.zoom || 1) + delta));
+  t.zoom = (window.XZScale && XZScale.isOn(t)) ? XZScale.quantize(t, t.zoom || 1, delta > 0 ? 1 : -1) : Math.max(0.4, Math.min(3, (t.zoom || 1) + delta));
   t.webview.setZoomFactor(t.zoom);
   updateZoomIndicator();
 }
@@ -1761,6 +2768,14 @@ function handleShortcutInput(input, target) {
   }
   if (shortcutMatches(input, settings.speedShortcuts.measure)) {
     toggleMeasureOverlay();
+    return true;
+  }
+  if (shortcutMatches(input, settings.speedShortcuts.screenshot)) {
+    screenshotCurrentGame();
+    return true;
+  }
+  if (shortcutMatches(input, settings.speedShortcuts.aim)) {
+    if (window.AimAssist) window.AimAssist.toggle();
     return true;
   }
   for (const hotkey of settings.speedHotkeys) {
@@ -2103,33 +3118,114 @@ function renderWindows() {
   }
   for (const t of tabs) list.appendChild(winrowEl(t));
 }
-$('win-grid-btn').addEventListener('click', () => ipcRenderer.invoke('window:tile-grid'));
 
 // ---------- Profiles ----------
+// Keep whatever the user has half-typed: profiles:changed fires on our own writes
+// too, and a naive redraw would wipe the open editor.
+function captureProfileEditDraft() {
+  if (!editingProfileId) { profileEditDraft = null; return null; }
+  const card = document.querySelector('#profile-list .profile-card.editing');
+  if (!card) return profileEditDraft;
+  const input = card.querySelector('[data-field="name"]');
+  const selected = card.querySelector('.color-choice.selected');
+  const draft = profileEditDraft || { id: editingProfileId, fresh: false };
+  draft.id = editingProfileId;
+  if (input) {
+    draft.name = input.value;
+    try { draft.caret = input.selectionStart; } catch (e) {}
+  }
+  if (selected && selected.dataset.color) draft.color = selected.dataset.color;
+  const sitesEl = card.querySelector('[data-field="sites"]');
+  if (sitesEl) draft.sites = sitesEl.value;
+  profileEditDraft = draft;
+  return draft;
+}
+function syncProfileOrderBar() {
+  const manualBtn = $('profile-order-manual');
+  const recentBtn = $('profile-order-recent');
+  const applyBtn = $('profile-apply-order');
+  const hint = $('profile-order-hint');
+  if (manualBtn) {
+    manualBtn.textContent = i18n.t('prof.order_manual');
+    manualBtn.classList.toggle('active', profileOrderView === 'manual');
+  }
+  if (recentBtn) {
+    recentBtn.textContent = i18n.t('prof.order_recent');
+    recentBtn.classList.toggle('active', profileOrderView === 'recent');
+  }
+  if (applyBtn) {
+    applyBtn.textContent = i18n.t('prof.apply_order');
+    applyBtn.style.display = profileOrderView === 'recent' ? '' : 'none';
+  }
+  if (hint) hint.textContent = i18n.t('prof.order_manual') + ' · ⌘1 – ⌘8';
+}
 async function renderProfiles() {
-  const list = $('profile-list'); list.innerHTML = '';
+  const list = $('profile-list');
+  // A redraw mid-drag would drop the pointer target; queue it for dragend instead.
+  if (profileDragId != null) { profileRenderPending = true; return; }
+  const draft = captureProfileEditDraft();
+  list.innerHTML = '';
   ensureProfiles();
+  syncProfileOrderBar();
   const pwCounts = new Map();
   for (const pw of passwords) {
     if (!pw.profileId) continue;
     pwCounts.set(pw.profileId, (pwCounts.get(pw.profileId) || 0) + 1);
   }
-  for (const p of profiles) {
+  const view = profilesForView();
+  const manual = profileOrderView === 'manual';
+  for (let viewIndex = 0; viewIndex < view.length; viewIndex++) {
+    const p = view[viewIndex];
     const card = document.createElement('div');
     card.className = 'profile-card';
+    card.dataset.profileId = p.id;
     const isDefault = p.id === settings.defaultProfileId;
     const pwCount = pwCounts.get(p.id) || 0;
     const isEditing = editingProfileId === p.id;
     if (isEditing) card.classList.add('editing');
+    const editName = (isEditing && draft && draft.id === p.id && draft.name != null) ? draft.name : p.name;
+    const editColor = (isEditing && draft && draft.id === p.id && draft.color) ? draft.color : p.color;
+    const siteList = normalizeSiteRuleList(profileSites(p));
+    const editSites = (isEditing && draft && draft.id === p.id && draft.sites != null)
+      ? draft.sites
+      : siteList.join('\n');
     const colorChoices = PROFILE_COLORS.map(color =>
-      '<button type="button" class="color-choice' + (color === p.color ? ' selected' : '') +
+      '<button type="button" class="color-choice' + (color === editColor ? ' selected' : '') +
       '" data-color="' + color + '" style="background:' + color + '" title="' + color + '"></button>'
     ).join('');
+    // Rank badge doubles as the Cmd+N legend for the first eight slots.
+    const rank = viewIndex + 1;
+    const canMove = manual && !isEditing;
+    const orderCol =
+      '<div class="pc-order">' +
+        '<div class="pc-rank' + (rank <= 8 ? ' has-key' : '') + '">' + (rank <= 8 ? '⌘' + rank : rank) + '</div>' +
+        '<button type="button" class="pc-move" data-act="move-up" title="' + escapeHtml(i18n.t('prof.move_up')) +
+          '" aria-label="' + escapeHtml(i18n.t('prof.move_up')) + '"' + (canMove ? '' : ' disabled') + '>▲</button>' +
+        '<button type="button" class="pc-move" data-act="move-down" title="' + escapeHtml(i18n.t('prof.move_down')) +
+          '" aria-label="' + escapeHtml(i18n.t('prof.move_down')) + '"' + (canMove ? '' : ' disabled') + '>▼</button>' +
+      '</div>';
+    const dayState = profileDayState(p);
+    const statusRow =
+      '<div class="pc-status">' +
+        '<span class="pc-dot ' + dayState + '"></span>' +
+        '<span class="pc-status-text">' + escapeHtml(profileDayStateLabel(dayState)) + '</span>' +
+      '</div>' +
+      (p.lastOpenedAt
+        ? '<div class="pc-last">' + escapeHtml(i18n.t('prof.last_opened')) + ' · ' + escapeHtml(formatRelativeTime(p.lastOpenedAt)) + '</div>'
+        : '');
     card.innerHTML = isEditing
-      ? '<div class="swatch" data-preview style="background:' + p.color + '"></div>' +
+      ? orderCol +
+        '<div class="swatch" data-preview style="background:' + editColor + '"></div>' +
         '<div class="profile-edit-fields">' +
-          '<input data-field="name" value="' + escapeHtml(p.name) + '" placeholder="' + escapeHtml(i18n.t('prof.placeholder')) + '">' +
+          '<input data-field="name" value="' + escapeHtml(editName) + '" placeholder="' + escapeHtml(i18n.t('prof.placeholder')) + '">' +
           '<div class="color-row"><span>' + escapeHtml(i18n.t('prof.color')) + '</span>' + colorChoices + '</div>' +
+          '<div class="pc-sites-edit">' +
+            '<div class="pc-sites-title">' + escapeHtml(tOr('sites.field_label', '\u8fd9\u4e9b\u7f51\u7ad9\u7528\u6b64\u8d26\u53f7\u6253\u5f00')) + '</div>' +
+            '<textarea data-field="sites" rows="3" spellcheck="false" placeholder="' +
+              escapeHtml(tOr('sites.field_placeholder', '\u6bcf\u884c\u4e00\u4e2a\u57df\u540d\uff0c\u4f8b\u5982 4399.com')) + '">' +
+              escapeHtml(editSites) + '</textarea>' +
+            '<div class="pc-sites-hint">' + escapeHtml(tOr('sites.field_hint', '\u53ea\u5f71\u54cd\u65b0\u5f00\u7684\u9875\u9762\uff1b\u5728\u9875\u9762\u91cc\u70b9\u94fe\u63a5\u4ecd\u7136\u7559\u5728\u5f53\u524d\u8d26\u53f7\u3002')) + '</div>' +
+          '</div>' +
           '<div class="pc-meta"><span data-stat="cookies">…</span>' + escapeHtml(i18n.t('prof.cookies')) +
             ' · ' + pwCount + ' ' + escapeHtml(i18n.t('prof.passwords_count')) +
           '</div>' +
@@ -2138,14 +3234,20 @@ async function renderProfiles() {
           '<button data-act="save" class="primary">' + escapeHtml(i18n.t('common.save')) + '</button>' +
           '<button data-act="cancel">' + escapeHtml(i18n.t('common.cancel')) + '</button>' +
         '</div>'
-      : '<div class="swatch" style="background:' + p.color + '"></div>' +
+      : orderCol +
+        '<div class="swatch" style="background:' + p.color + '"></div>' +
         '<div>' +
           '<div class="pc-name">' + escapeHtml(p.name) +
             (isDefault ? '<span class="pc-tag default">' + escapeHtml(i18n.t('prof.default')) + '</span>' : '') +
           '</div>' +
+          statusRow +
           '<div class="pc-meta"><span data-stat="cookies">…</span>' + escapeHtml(i18n.t('prof.cookies')) +
             ' · ' + pwCount + ' ' + escapeHtml(i18n.t('prof.passwords_count')) +
           '</div>' +
+          (siteList.length
+            ? '<div class="pc-sites">' + escapeHtml(tOr('sites.card_prefix', '\u6307\u5b9a\u7f51\u7ad9')) + ' · ' +
+              escapeHtml(siteList.join(' \u00b7 ')) + '</div>'
+            : '') +
         '</div>' +
         '<div class="pc-actions">' +
           '<button data-act="open">' + escapeHtml(i18n.t('prof.open_window')) + '</button>' +
@@ -2156,6 +3258,7 @@ async function renderProfiles() {
           (p.id === 'main' ? '' : '<button data-act="delete" class="danger">' + escapeHtml(i18n.t('prof.delete')) + '</button>') +
         '</div>';
     const q = (sel) => card.querySelector(sel);
+    wireProfileOrderControls(card, p, viewIndex, view, canMove);
     if (isEditing) {
       card.querySelectorAll('.color-choice').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -2163,31 +3266,57 @@ async function renderProfiles() {
           btn.classList.add('selected');
           const preview = q('[data-preview]');
           if (preview) preview.style.background = btn.dataset.color;
+          if (profileEditDraft && profileEditDraft.id === p.id) profileEditDraft.color = btn.dataset.color;
         });
       });
       q('[data-act="save"]').addEventListener('click', async () => {
         const name = q('[data-field="name"]').value.trim();
         const selected = q('.color-choice.selected');
         if (!name) return;
-        p.name = name;
-        if (selected && selected.dataset.color) p.color = selected.dataset.color;
+        const patch = { id: p.id, name };
+        if (selected && selected.dataset.color) patch.color = selected.dataset.color;
+        const sitesEl = q('[data-field="sites"]');
+        // One rule per line, but commas and spaces are tolerated — people paste lists.
+        const rules = sitesEl ? normalizeSiteRuleList(String(sitesEl.value || '').split(/[\s,;\u3001\uff0c]+/)) : null;
         editingProfileId = null;
-        await saveProfiles();
+        profileEditDraft = null;
+        await upsertProfile(patch);
+        const taken = rules ? await writeProfileSites(p.id, rules) : [];
         refreshProfileChip();
         renderProfiles();
+        if (taken.length) {
+          showToast(tOr('sites.taken_toast', '\u8fd9\u4e9b\u7f51\u7ad9\u5df2\u4ece {from} \u6539\u7ed9 {name}')
+            .replace('{from}', taken.join('\u3001')).replace('{name}', name));
+        }
       });
-      q('[data-field="name"]').addEventListener('keydown', (e) => {
+      const nameInput = q('[data-field="name"]');
+      nameInput.addEventListener('input', () => {
+        profileEditDraft = profileEditDraft || { id: p.id };
+        profileEditDraft.id = p.id;
+        profileEditDraft.name = nameInput.value;
+        try { profileEditDraft.caret = nameInput.selectionStart; } catch (e) {}
+      });
+      nameInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') q('[data-act="save"]').click();
         if (e.key === 'Escape') q('[data-act="cancel"]').click();
       });
       q('[data-act="cancel"]').addEventListener('click', () => {
         editingProfileId = null;
+        profileEditDraft = null;
         renderProfiles();
       });
       list.appendChild(card);
+      // Only steal the selection the first time the editor opens; a broadcast redraw
+      // must land the caret back where the user left it.
+      const fresh = !draft || draft.id !== p.id || draft.fresh !== false;
+      const caret = draft && draft.id === p.id ? draft.caret : null;
+      if (profileEditDraft) profileEditDraft.fresh = false;
       setTimeout(() => {
         const input = q('[data-field="name"]');
-        if (input) { input.focus(); input.select(); }
+        if (!input || !document.body.contains(input)) return;
+        input.focus();
+        if (fresh) input.select();
+        else if (caret != null) { try { input.setSelectionRange(caret, caret); } catch (e) {} }
       }, 0);
       ipcRenderer.invoke('profile:stats', p).then((s) => {
         if (!document.body.contains(card)) return;
@@ -2202,13 +3331,14 @@ async function renderProfiles() {
     const bt = q('[data-act="default"]'); if (bt) bt.addEventListener('click', async () => {
       settings.defaultProfileId = p.id; await saveSettings(); refreshProfileChip(); renderProfiles();
     });
-    q('[data-act="open"]').addEventListener('click', () => ipcRenderer.invoke('window:open', homeUrl, p.id));
+    q('[data-act="open"]').addEventListener('click', () => ipcRenderer.invoke('window:open', (window.XZAutoLogin && XZAutoLogin.quickUrlFor(p.id)) || homeUrl, p.id));
     q('[data-act="clone"]').addEventListener('click', () => {
       const t = activeTab();
       ipcRenderer.invoke('window:open', t ? t.url : homeUrl, p.id);
     });
     q('[data-act="rename"]').addEventListener('click', () => {
       editingProfileId = p.id;
+      profileEditDraft = { id: p.id, name: p.name, color: p.color, caret: null, fresh: true };
       renderProfiles();
     });
     q('[data-act="clear"]').addEventListener('click', async () => {
@@ -2220,15 +3350,15 @@ async function renderProfiles() {
     if (db) db.addEventListener('click', async () => {
       if (!confirm(i18n.t('prof.confirm_delete'))) return;
       await ipcRenderer.invoke('profile:clear', p);
-      const i = profiles.indexOf(p);
-      if (i >= 0) profiles.splice(i, 1);
-      if (settings.defaultProfileId === p.id) { settings.defaultProfileId = profiles[0] ? profiles[0].id : null; await saveSettings(); refreshProfileChip(); }
+      await removeProfile(p.id);
+      if (settings.defaultProfileId === p.id) { settings.defaultProfileId = profiles[0] ? profiles[0].id : null; await saveSettings(); }
       if (windowProfileId === p.id) windowProfileId = settings.defaultProfileId || (profiles[0] && profiles[0].id);
-      await saveProfiles();
       refreshProfileChip();
+      updateCounts();
       renderProfiles();
     });
     list.appendChild(card);
+    if (window.XZAutoLogin) XZAutoLogin.decorateProfileCard(card, p);
     ipcRenderer.invoke('profile:stats', p).then((s) => {
       if (!document.body.contains(card)) return;
       const el = card.querySelector('[data-stat="cookies"]');
@@ -2239,12 +3369,102 @@ async function renderProfiles() {
     });
   }
 }
+// ---- Profile ordering: array order == the Cmd+1..9 order ----
+function moveProfile(id, delta) {
+  const ids = profiles.map(p => p.id);
+  const from = ids.indexOf(id);
+  if (from < 0) return Promise.resolve(profiles);
+  const to = from + delta;
+  if (to < 0 || to >= ids.length) return Promise.resolve(profiles);
+  ids.splice(to, 0, ids.splice(from, 1)[0]);
+  return reorderProfiles(ids).then(() => { renderProfiles(); refreshProfileChip(); });
+}
+function clearProfileDropHints() {
+  document.querySelectorAll('#profile-list .profile-card').forEach(el => {
+    el.classList.remove('drop-before', 'drop-after', 'dragging');
+  });
+}
+function wireProfileOrderControls(card, p, viewIndex, view, canMove) {
+  const up = card.querySelector('[data-act="move-up"]');
+  const down = card.querySelector('[data-act="move-down"]');
+  if (up) {
+    if (!canMove || viewIndex === 0) up.disabled = true;
+    up.addEventListener('click', (e) => { e.stopPropagation(); if (!up.disabled) moveProfile(p.id, -1); });
+  }
+  if (down) {
+    if (!canMove || viewIndex === view.length - 1) down.disabled = true;
+    down.addEventListener('click', (e) => { e.stopPropagation(); if (!down.disabled) moveProfile(p.id, 1); });
+  }
+  // Dragging only makes sense while the view mirrors the stored order.
+  if (!canMove) { card.draggable = false; return; }
+  card.draggable = true;
+  card.addEventListener('dragstart', (e) => {
+    profileDragId = p.id;
+    card.classList.add('dragging');
+    try {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', p.id);
+    } catch (err) {}
+  });
+  card.addEventListener('dragend', () => {
+    profileDragId = null;
+    clearProfileDropHints();
+    if (profileRenderPending) { profileRenderPending = false; renderProfiles(); }
+  });
+  card.addEventListener('dragover', (e) => {
+    if (profileDragId == null || profileDragId === p.id) return;
+    e.preventDefault();
+    try { e.dataTransfer.dropEffect = 'move'; } catch (err) {}
+    const box = card.getBoundingClientRect();
+    const after = (e.clientY - box.top) > box.height / 2;
+    card.classList.toggle('drop-before', !after);
+    card.classList.toggle('drop-after', after);
+  });
+  card.addEventListener('dragleave', () => {
+    card.classList.remove('drop-before', 'drop-after');
+  });
+  card.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const after = card.classList.contains('drop-after');
+    const dragId = profileDragId;
+    profileDragId = null;
+    profileRenderPending = false;
+    clearProfileDropHints();
+    if (!dragId || dragId === p.id) return;
+    const ids = profiles.map(x => x.id);
+    const from = ids.indexOf(dragId);
+    if (from < 0) return;
+    ids.splice(from, 1);
+    let target = ids.indexOf(p.id);
+    if (target < 0) return;
+    if (after) target += 1;
+    ids.splice(target, 0, dragId);
+    reorderProfiles(ids).then(() => { renderProfiles(); refreshProfileChip(); });
+  });
+}
+function setProfileOrderView(mode) {
+  profileOrderView = mode === 'recent' ? 'recent' : 'manual';
+  renderProfiles();
+}
+$('profile-order-manual').addEventListener('click', () => setProfileOrderView('manual'));
+$('profile-order-recent').addEventListener('click', () => setProfileOrderView('recent'));
+$('profile-apply-order').addEventListener('click', async () => {
+  // "Recently used" is display-only until the user commits it.
+  const ids = profilesForView().map(p => p.id);
+  await reorderProfiles(ids);
+  profileOrderView = 'manual';
+  refreshProfileChip();
+  renderProfiles();
+});
 $('profile-create-btn').addEventListener('click', async () => {
   ensureProfiles();
+  // main's upsert unshifts unknown ids, so a new profile lands on top (= Cmd+1).
   const profile = makeProfile(nextProfileName());
-  profiles.push(profile);
   editingProfileId = profile.id;
-  await saveProfiles();
+  profileEditDraft = { id: profile.id, name: profile.name, color: profile.color, caret: null, fresh: true };
+  profileOrderView = 'manual';
+  await upsertProfile(profile);
   if (!settings.defaultProfileId) {
     settings.defaultProfileId = profile.id;
     await saveSettings();
@@ -2842,6 +4062,8 @@ function renderSpeedShortcutRows() {
     ['next', 'shortcut.speed_next'],
     ['reset', 'shortcut.speed_reset'],
     ['measure', 'shortcut.measure_toggle'],
+    ['screenshot', 'shortcut.screenshot'],
+    ['aim', 'shortcut.aim'],
   ];
   for (const [key, labelKey] of rows) {
     const row = document.createElement('div');
@@ -2921,6 +4143,15 @@ function renderSpeedToolSettings() {
   renderSpeedHotkeyRows();
   renderMeasureSettings();
 }
+// The fixed-address box only means anything in 'custom' mode. Disable and dim it in the
+// other two rather than hiding the row, so the settings page does not jump around.
+function updateNewTabUrlRow() {
+  const row = $('setting-new-tab-url-row');
+  const input = $('setting-new-tab-url');
+  const on = settings.newTabMode === 'custom';
+  if (input) input.disabled = !on;
+  if (row) row.style.opacity = on ? '' : '0.45';
+}
 function renderSettings() {
   // Identity inputs
   const id = settings.identity || {};
@@ -2944,7 +4175,13 @@ function renderSettings() {
     if (p.id === settings.defaultProfileId) opt.selected = true;
     dpSel.appendChild(opt);
   }
+  // New-tab destination
+  const ntSel = $('setting-new-tab-mode');
+  ntSel.value = NEW_TAB_MODES.includes(settings.newTabMode) ? settings.newTabMode : 'current';
+  $('setting-new-tab-url').value = settings.newTabUrl || '';
+  updateNewTabUrlRow();
   // Switches
+  setSwitch($('setting-glass'), settings.glassEffect !== false);
   setSwitch($('setting-restore-session'), !!settings.restoreSession);
   setSwitch($('setting-sidebar-collapsed'), !!settings.sidebarCollapsed);
   setSwitch($('setting-show-quick-note'), settings.showQuickNote !== false);
@@ -2998,7 +4235,19 @@ $('setting-default-profile').addEventListener('change', async (e) => {
   await saveSettings();
   refreshProfileChip();
 });
+$('setting-new-tab-mode').addEventListener('change', async (e) => {
+  settings.newTabMode = NEW_TAB_MODES.includes(e.target.value) ? e.target.value : 'current';
+  updateNewTabUrlRow();
+  await saveSettings();
+});
+let newTabUrlSaveTimer = null;
+$('setting-new-tab-url').addEventListener('input', (e) => {
+  settings.newTabUrl = e.target.value;
+  clearTimeout(newTabUrlSaveTimer);
+  newTabUrlSaveTimer = setTimeout(() => { newTabUrlSaveTimer = null; saveSettings(); }, 250);
+});
 attachSwitch($('setting-restore-session'), async (v) => { settings.restoreSession = v; await saveSettings(); });
+attachSwitch($('setting-glass'), async (v) => { settings.glassEffect = v; setGlass(v); await saveSettings(); });
 attachSwitch($('setting-sidebar-collapsed'), async (v) => { settings.sidebarCollapsed = v; await saveSettings(); });
 attachSwitch($('setting-show-quick-note'), async (v) => {
   await setQuickNoteVisible(v);
@@ -3225,6 +4474,585 @@ function updateCounts() {
   else if (currentRoute === 'recent') renderRecent();
   else if (currentRoute === 'windows') renderWindows();
   else if (currentRoute === 'accounts') renderAccounts();
+}
+
+// ---------- Report (monthly / yearly play summary) ----------
+// main.js does all the aggregation in usageReport(); this route only draws what
+// invoke('usage:report') hands back. Charts are plain divs sized by percentage --
+// no chart library, nothing Chromium 87 lacks.
+let reportScope = 'month';
+let reportKey = beijingMonth();
+let reportData = null;
+let reportMonths = [];   // every 'YYYY-MM' we have ever seen data for, accumulated
+let reportReqId = 0;     // guards against a slow reply overwriting a newer one
+
+// "3 小时 20 分钟" / "45 分钟" / "不到 1 分钟"
+function formatDurationMs(ms) {
+  const n = Math.max(0, Number(ms) || 0);
+  if (n < 60000) return tOr('report.under_minute', '不到 1 分钟');
+  const totalMin = Math.floor(n / 60000);
+  const hours = Math.floor(totalMin / 60);
+  const mins = totalMin % 60;
+  const hUnit = i18n.t('common.hours');
+  const mUnit = i18n.t('common.minutes');
+  if (hours <= 0) return mins + ' ' + mUnit;
+  if (mins <= 0) return hours + ' ' + hUnit;
+  return hours + ' ' + hUnit + ' ' + mins + ' ' + mUnit;
+}
+// Big-number form for the overview tiles: one bold figure plus a small unit.
+function statDuration(ms) {
+  const n = Math.max(0, Number(ms) || 0);
+  if (n >= 3600000) {
+    const hours = n / 3600000;
+    const text = hours >= 10 ? String(Math.round(hours)) : String(Math.round(hours * 10) / 10);
+    return { value: text, unit: i18n.t('common.hours') };
+  }
+  return { value: String(Math.round(n / 60000)), unit: i18n.t('common.minutes') };
+}
+// Profile colours are user-entered data. Only a plain hex value is allowed into an
+// inline style; anything else falls back to the theme accent.
+function repColor(value, fallback) {
+  return isHexColor(value) ? String(value) : (fallback || 'var(--main-orange)');
+}
+function reportMonthLabel(key) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(key || ''));
+  if (!m) return String(key || '');
+  if (isZhLang()) return m[1] + '年' + Number(m[2]) + '月';
+  return m[1] + '-' + m[2];
+}
+function reportYearLabel(key) {
+  const y = String(key || '');
+  return isZhLang() ? (y + '年') : y;
+}
+function reportKeyLabel(scope, key) {
+  return scope === 'year' ? reportYearLabel(key) : reportMonthLabel(key);
+}
+function rememberReportMonths(list) {
+  if (!Array.isArray(list)) return;
+  for (const m of list) if (m && reportMonths.indexOf(m) < 0) reportMonths.push(m);
+  reportMonths.sort();
+}
+// Newest first: the month or year you most likely want is the first option.
+function reportPeriodValues() {
+  const nowMonth = beijingMonth();
+  const months = reportMonths.slice();
+  if (months.indexOf(nowMonth) < 0) months.push(nowMonth);
+  if (reportScope === 'month') {
+    if (months.indexOf(reportKey) < 0) months.push(reportKey);
+    return months.sort().reverse();
+  }
+  const years = [];
+  for (const m of months) {
+    const y = m.slice(0, 4);
+    if (years.indexOf(y) < 0) years.push(y);
+  }
+  if (years.indexOf(reportKey) < 0) years.push(reportKey);
+  return years.sort().reverse();
+}
+function paintReportPeriodSelect() {
+  const sel = $('report-period');
+  if (!sel) return;
+  const values = reportPeriodValues();
+  sel.innerHTML = '';
+  for (const value of values) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = reportKeyLabel(reportScope, value);
+    sel.appendChild(opt);
+  }
+  sel.value = reportKey;
+  if (sel.value !== reportKey && values.length) { reportKey = values[0]; sel.value = reportKey; }
+}
+// Strings live here rather than in data-i18n so a missing key shows Chinese, not "report.title".
+function paintReportStrings() {
+  const set = (id, text) => { const el = $(id); if (el) el.textContent = text; };
+  set('nav-report-label', tOr('report.title', '报告'));
+  set('report-title', tOr('report.title', '报告'));
+  set('report-scope-month', tOr('report.month', '月报'));
+  set('report-scope-year', tOr('report.year', '年报'));
+  syncReportExportButton();
+}
+function setReportScope(scope) {
+  const next = scope === 'year' ? 'year' : 'month';
+  if (next === reportScope) return;
+  if (next === 'year') {
+    reportKey = reportKey.slice(0, 4);
+  } else {
+    const year = reportKey.slice(0, 4);
+    const inYear = reportMonths.filter(m => m.slice(0, 4) === year);
+    const nowMonth = beijingMonth();
+    reportKey = inYear.length ? inYear[inYear.length - 1]
+      : (nowMonth.slice(0, 4) === year ? nowMonth : year + '-01');
+  }
+  reportScope = next;
+  renderReport();
+}
+function renderReport() {
+  const month = $('report-scope-month');
+  const year = $('report-scope-year');
+  if (month) month.classList.toggle('active', reportScope === 'month');
+  if (year) year.classList.toggle('active', reportScope === 'year');
+  paintReportStrings();
+  paintReportPeriodSelect();
+  loadReport();
+}
+async function loadReport() {
+  const id = ++reportReqId;
+  const scope = reportScope;
+  const key = reportKey;
+  let data = null;
+  try {
+    data = await ipcRenderer.invoke('usage:report', { scope, key });
+  } catch (e) {
+    data = null;
+  }
+  if (id !== reportReqId) return;   // a newer switch already won the race
+  rememberReportMonths(data && data.months);
+  reportData = data;
+  paintReportPeriodSelect();
+  paintReportBody();
+}
+
+// A combination row's label: every account in its own colour, joined by plus
+// signs. Works for two names or five; the old build could only ever draw two.
+function comboLabel(combo, colorOf) {
+  const names = Array.isArray(combo.names) ? combo.names : [];
+  const colors = Array.isArray(combo.colors) ? combo.colors : [];
+  const parts = [];
+  for (let i = 0; i < names.length; i++) {
+    if (i) parts.push('<span class="rep-pair-plus">+</span>');
+    parts.push('<span class="rep-pair-name" style="color:' + colorOf(colors[i], i) + '">' +
+      escapeHtml(names[i] || '') + '</span>');
+  }
+  return parts.join('');
+}
+// Older reports only carry pairs; reshape them so one drawing path serves both.
+function combosOf(data) {
+  if (Array.isArray(data.combos) && data.combos.length) {
+    return data.combos.filter(c => c && c.overlapMs > 0);
+  }
+  const pairs = Array.isArray(data.pairs) ? data.pairs.filter(p => p && p.overlapMs > 0) : [];
+  return pairs.map(p => ({
+    ids: [p.a, p.b],
+    names: [p.nameA || p.a || '', p.nameB || p.b || ''],
+    colors: [p.colorA, p.colorB],
+    size: 2,
+    overlapMs: p.overlapMs,
+  }));
+}
+
+function repSection(title, desc) {
+  const sec = document.createElement('div');
+  sec.className = 'rep-section';
+  const head = document.createElement('div');
+  head.className = 'rep-sec-title';
+  head.textContent = title;
+  sec.appendChild(head);
+  if (desc) {
+    const d = document.createElement('div');
+    d.className = 'rep-sec-desc';
+    d.textContent = desc;
+    sec.appendChild(d);
+  }
+  return sec;
+}
+// One horizontal bar. labelHtml is trusted markup built by the caller (names escaped).
+function repBarRow(labelHtml, ratio, valueText, fillStyle, tip) {
+  const row = document.createElement('div');
+  row.className = 'rep-row';
+  if (tip) row.title = tip;
+  const pct = Math.max(0, Math.min(100, ratio * 100));
+  row.innerHTML =
+    '<div class="rep-row-label">' + labelHtml + '</div>' +
+    '<div class="rep-track"><div class="rep-fill" style="width:' + pct.toFixed(2) + '%' +
+    (fillStyle ? ';' + fillStyle : '') + '"></div></div>' +
+    '<div class="rep-row-val">' + escapeHtml(valueText) + '</div>';
+  return row;
+}
+// A column chart plus its own sparse axis; values is an array of ms.
+function repColumns(values, tickAt, labelFor, tipFor) {
+  const wrap = document.createElement('div');
+  const max = Math.max.apply(null, values.concat([1]));
+  const bars = document.createElement('div');
+  bars.className = 'rep-bars';
+  let peak = 0;
+  for (let i = 1; i < values.length; i++) if (values[i] > values[peak]) peak = i;
+  const anyData = values[peak] > 0;
+  for (let i = 0; i < values.length; i++) {
+    const bar = document.createElement('div');
+    bar.className = 'rep-bar' + (anyData && i === peak ? ' peak' : '');
+    if (tipFor) bar.title = tipFor(i, values[i]);
+    const fill = document.createElement('div');
+    fill.className = 'rep-bar-fill';
+    fill.style.height = Math.max(2, Math.round((values[i] / max) * 100)) + '%';
+    bar.appendChild(fill);
+    bars.appendChild(bar);
+  }
+  wrap.appendChild(bars);
+  const axis = document.createElement('div');
+  axis.className = 'rep-axis';
+  for (let i = 0; i < values.length; i++) {
+    const tick = document.createElement('div');
+    tick.className = 'rep-tick';
+    tick.textContent = (!tickAt || tickAt.indexOf(i) >= 0) ? labelFor(i) : '';
+    axis.appendChild(tick);
+  }
+  wrap.appendChild(axis);
+  return { node: wrap, peak, anyData };
+}
+
+function paintReportBody() {
+  const body = $('report-body');
+  if (!body) return;
+  body.innerHTML = '';
+  const range = $('report-range');
+  if (range) range.textContent = reportKeyLabel(reportScope, reportKey);
+  const data = reportData;
+  syncReportExportButton();
+  if (!data || !(Number(data.totalMs) > 0)) {
+    const empty = document.createElement('div');
+    empty.className = 'rep-empty';
+    empty.textContent = tOr('report.empty', '这段时间还没有游玩记录。');
+    body.appendChild(empty);
+    return;
+  }
+
+  // 1) Overview: the four numbers worth reading first.
+  const stats = document.createElement('div');
+  stats.className = 'rep-stats';
+  const addStat = (value, unit, label) => {
+    const card = document.createElement('div');
+    card.className = 'rep-stat';
+    card.innerHTML =
+      '<div class="rep-stat-num">' + escapeHtml(String(value)) +
+      (unit ? '<span class="rep-stat-unit">' + escapeHtml(unit) + '</span>' : '') + '</div>' +
+      '<div class="rep-stat-label">' + escapeHtml(label) + '</div>';
+    stats.appendChild(card);
+  };
+  const total = statDuration(data.totalMs);
+  const longest = statDuration(data.longestSessionMs);
+  addStat(total.value, total.unit, tOr('report.total_time', '总时长'));
+  addStat(data.activeDays || 0, i18n.t('common.days'), tOr('report.active_days', '活跃天数'));
+  addStat(data.longestStreak || 0, i18n.t('common.days'), tOr('report.streak', '最长连续'));
+  addStat(longest.value, longest.unit, tOr('report.longest_session', '单次最长'));
+  if ((data.maxConcurrent || 0) >= 2) {
+    addStat(data.maxConcurrent, tOr('report.windows_unit', '个'), tOr('report.max_concurrent', '同时最多'));
+  }
+  body.appendChild(stats);
+
+  // 2) Which accounts were online together — in groups of any size.
+  const combos = combosOf(data);
+  if (combos.length) {
+    const sec = repSection(
+      tOr('report.pairs', '常用组合'),
+      tOr('report.pairs_hint', '统计的是这几个账号同时在线的时长，每段时间只算给当时正好开着的那一组。') + ' ' +
+      tOr('report.pairs_desc', '这些号经常一起在线')
+    );
+    const rows = document.createElement('div');
+    rows.className = 'rep-rows wide combo';
+    const max = combos[0].overlapMs || 1;
+    const fallback = ['var(--main-orange)', 'var(--deep-orange)'];
+    for (const combo of combos) {
+      const cols = (combo.colors || []).map((c, i) => repColor(c, fallback[i % 2]));
+      const label = comboLabel(combo, (c, i) => cols[i] || fallback[i % 2]);
+      const grad = cols.length > 1
+        ? 'background: linear-gradient(90deg, ' + cols.join(', ') + ')'
+        : 'background: ' + (cols[0] || fallback[0]);
+      rows.appendChild(repBarRow(label, combo.overlapMs / max, formatDurationMs(combo.overlapMs), grad));
+    }
+    sec.appendChild(rows);
+    body.appendChild(sec);
+  }
+
+  // 3) Per-account time, each bar in that account's own colour.
+  const byProfile = Array.isArray(data.byProfile) ? data.byProfile.filter(p => p && p.totalMs > 0) : [];
+  if (byProfile.length) {
+    const sec = repSection(tOr('report.by_profile', '各账号时长'), '');
+    const rows = document.createElement('div');
+    rows.className = 'rep-rows';
+    const max = byProfile[0].totalMs || 1;
+    for (const p of byProfile) {
+      const color = repColor(p.color);
+      const sessions = String(p.sessions || 0) + ' ' + tOr('report.sessions_count', '次');
+      rows.appendChild(repBarRow(
+        '<span class="rep-pair-name" style="color:' + color + '">' + escapeHtml(p.name || p.profileId || '') + '</span>',
+        p.totalMs / max,
+        formatDurationMs(p.totalMs),
+        'background:' + color,
+        (p.name || '') + ' · ' + formatDurationMs(p.totalMs) + ' · ' + sessions
+      ));
+    }
+    sec.appendChild(rows);
+    body.appendChild(sec);
+  }
+
+  // 4) Hour of day, peak column highlighted as the "golden hour".
+  const byHour = Array.isArray(data.byHour) && data.byHour.length === 24 ? data.byHour.map(Number) : null;
+  if (byHour) {
+    const sec = repSection(tOr('report.by_hour', '时段分布'), '');
+    const chart = repColumns(
+      byHour,
+      [0, 6, 12, 18, 23],
+      (i) => String(i),
+      (i, v) => i + ':00 · ' + formatDurationMs(v)
+    );
+    sec.appendChild(chart.node);
+    if (chart.anyData) {
+      const golden = document.createElement('div');
+      golden.className = 'rep-golden';
+      golden.textContent = tOr('report.golden_hour', '黄金时段') + ' ' +
+        chart.peak + ':00–' + ((chart.peak + 1) % 24) + ':00 · ' + formatDurationMs(byHour[chart.peak]);
+      sec.appendChild(golden);
+    }
+    body.appendChild(sec);
+  }
+
+  // 5) Day of week (index 0 = Sunday, same as main.js).
+  const byWeekday = Array.isArray(data.byWeekday) && data.byWeekday.length === 7 ? data.byWeekday.map(Number) : null;
+  if (byWeekday) {
+    const names = i18n.t('common.weekday_short');
+    const nameAt = (i) => (Array.isArray(names) && names[i] != null) ? String(names[i]) : String(i);
+    const sec = repSection(tOr('report.by_weekday', '星期分布'), '');
+    const chart = repColumns(byWeekday, null, nameAt, (i, v) => nameAt(i) + ' · ' + formatDurationMs(v));
+    sec.appendChild(chart.node);
+    body.appendChild(sec);
+  }
+}
+
+// ---------- report export (self-contained HTML) ----------
+// Everything below builds a file that has to survive on its own desktop: no theme
+// variables (the app's palette lives in index.html and would resolve to nothing),
+// no external stylesheet, no image path. Colours are therefore literal here -- the
+// one place in this file where that is correct.
+const EXPORT_PALETTE = {
+  bg: '#FAF6EF', panel: '#FFFFFF', ink: '#3B2E22', muted: '#8B7A67',
+  accent: '#C8843C', accent2: '#E4A85F', border: '#ECE0CE', track: '#F3EADB',
+};
+// Profile colours are user data; only a plain hex is allowed through.
+function expColor(value, fallback) {
+  return isHexColor(value) ? String(value) : (fallback || EXPORT_PALETTE.accent);
+}
+function exportStylesheet() {
+  const c = EXPORT_PALETTE;
+  return [
+    '*{box-sizing:border-box}',
+    'body{margin:0;padding:32px 18px 48px;background:' + c.bg + ';color:' + c.ink + ';',
+    'font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",Segoe UI,Helvetica,Arial,sans-serif;}',
+    '.wrap{max-width:760px;margin:0 auto}',
+    '.head{margin-bottom:22px}',
+    '.head h1{margin:0;font-size:24px;font-weight:700;letter-spacing:.02em}',
+    '.head .sub{margin-top:6px;color:' + c.muted + ';font-size:13px}',
+    '.card{background:' + c.panel + ';border:1px solid ' + c.border + ';border-radius:14px;padding:18px 20px;margin-bottom:16px}',
+    '.sec-title{font-size:15px;font-weight:600;margin:0 0 4px}',
+    '.sec-desc{font-size:12px;color:' + c.muted + ';margin:0 0 14px}',
+    '.stats{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px}',
+    '.stat{flex:1 1 150px;background:' + c.panel + ';border:1px solid ' + c.border + ';border-radius:14px;padding:16px 18px}',
+    '.stat .num{font-size:28px;font-weight:700;line-height:1.1;color:' + c.accent + '}',
+    '.stat .num span{font-size:13px;font-weight:600;margin-left:4px;color:' + c.muted + '}',
+    '.stat .cap{margin-top:6px;font-size:12px;color:' + c.muted + '}',
+    '.row{display:flex;align-items:center;gap:12px;margin:9px 0}',
+    '.row .lbl{width:34%;min-width:120px;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.row.combo .lbl{width:42%;white-space:normal;overflow:visible;line-height:1.35}',
+    '.row .track{flex:1;height:10px;border-radius:5px;background:' + c.track + ';overflow:hidden}',
+    '.row .track i{display:block;height:100%;border-radius:5px}',
+    '.row .val{flex:0 0 auto;min-width:104px;text-align:right;font-size:12px;color:' + c.muted + ';white-space:nowrap}',
+    '.plus{margin:0 6px;color:' + c.muted + '}',
+    '.cols{display:flex;align-items:flex-end;gap:2px;height:120px;margin-top:6px}',
+    '.cols .col{flex:1;height:100%;display:flex;align-items:flex-end}',
+    '.cols .col i{display:block;width:100%;border-radius:3px 3px 0 0;background:' + c.accent2 + '}',
+    '.cols .col.peak i{background:' + c.accent + '}',
+    '.axis{display:flex;gap:2px;margin-top:5px}',
+    '.axis span{flex:1;text-align:center;font-size:10px;color:' + c.muted + '}',
+    '.note{margin-top:10px;font-size:12px;color:' + c.accent + ';font-weight:600}',
+    '.foot{margin-top:24px;text-align:center;font-size:11px;color:' + c.muted + ';line-height:1.8}',
+  ].join('');
+}
+function expBarRow(labelHtml, ratio, valueText, fill, extraClass) {
+  const pct = Math.max(0, Math.min(100, (Number(ratio) || 0) * 100));
+  return '<div class="row' + (extraClass ? ' ' + extraClass : '') + '"><div class="lbl">' + labelHtml + '</div>' +
+    '<div class="track"><i style="width:' + pct.toFixed(2) + '%;background:' + fill + '"></i></div>' +
+    '<div class="val">' + escapeHtml(valueText) + '</div></div>';
+}
+function expColumns(values, tickAt, labelFor) {
+  const max = Math.max.apply(null, values.concat([1]));
+  let peak = 0;
+  for (let i = 1; i < values.length; i++) if (values[i] > values[peak]) peak = i;
+  const anyData = values[peak] > 0;
+  let cols = '', axis = '';
+  for (let i = 0; i < values.length; i++) {
+    const h = Math.max(2, Math.round((values[i] / max) * 100));
+    cols += '<div class="col' + (anyData && i === peak ? ' peak' : '') + '"><i style="height:' + h + '%"></i></div>';
+    axis += '<span>' + escapeHtml((!tickAt || tickAt.indexOf(i) >= 0) ? labelFor(i) : '') + '</span>';
+  }
+  return { html: '<div class="cols">' + cols + '</div><div class="axis">' + axis + '</div>', peak: peak, anyData: anyData };
+}
+// Rebuilt from the data rather than cloned from the DOM on purpose: the on-screen
+// report is painted with theme variables that mean nothing outside the app.
+function buildReportHtml(data, scope, key) {
+  const c = EXPORT_PALETTE;
+  const heading = tOr('report.export_heading', '小竹使用报告') + ' · ' + reportKeyLabel(scope, key);
+  const parts = [];
+  parts.push('<div class="head"><h1>' + escapeHtml(heading) + '</h1>' +
+    '<div class="sub">' + escapeHtml(tOr(scope === 'year' ? 'report.year' : 'report.month', scope === 'year' ? '年报' : '月报')) +
+    '</div></div>');
+
+  if (!data || !(Number(data.totalMs) > 0)) {
+    parts.push('<div class="card">' + escapeHtml(tOr('report.empty', '这段时间还没有游玩记录。')) + '</div>');
+  } else {
+    // 1) Overview
+    const total = statDuration(data.totalMs);
+    const longest = statDuration(data.longestSessionMs);
+    const tiles = [
+      [total.value, total.unit, tOr('report.total_time', '总时长')],
+      [String(data.activeDays || 0), i18n.t('common.days'), tOr('report.active_days', '活跃天数')],
+      [String(data.longestStreak || 0), i18n.t('common.days'), tOr('report.streak', '最长连续')],
+      [longest.value, longest.unit, tOr('report.longest_session', '单次最长')],
+    ];
+    let stats = '';
+    for (const t of tiles) {
+      stats += '<div class="stat"><div class="num">' + escapeHtml(t[0]) +
+        (t[1] ? '<span>' + escapeHtml(t[1]) + '</span>' : '') + '</div>' +
+        '<div class="cap">' + escapeHtml(t[2]) + '</div></div>';
+    }
+    parts.push('<div class="stats">' + stats + '</div>');
+
+    // 2) Which accounts were online together — groups of any size
+    const combos = combosOf(data);
+    if (combos.length) {
+      let rows = '';
+      const max = combos[0].overlapMs || 1;
+      for (const combo of combos) {
+        const cols = (combo.colors || []).map((col, i) => expColor(col, i % 2 ? c.accent2 : c.accent));
+        let label = '';
+        (combo.names || []).forEach((n, i) => {
+          if (i) label += '<span class="plus">+</span>';
+          label += '<span style="color:' + (cols[i] || c.accent) + ';font-weight:600">' + escapeHtml(n || '') + '</span>';
+        });
+        const grad = cols.length > 1 ? 'linear-gradient(90deg, ' + cols.join(', ') + ')' : (cols[0] || c.accent);
+        rows += expBarRow(label, combo.overlapMs / max, formatDurationMs(combo.overlapMs), grad, 'combo');
+      }
+      parts.push('<div class="card"><div class="sec-title">' + escapeHtml(tOr('report.pairs', '常用组合')) + '</div>' +
+        '<div class="sec-desc">' + escapeHtml(tOr('report.pairs_desc', '这些号经常一起在线')) + '</div>' + rows + '</div>');
+    }
+
+    // 3) Time per account
+    const byProfile = Array.isArray(data.byProfile) ? data.byProfile.filter(p => p && p.totalMs > 0) : [];
+    if (byProfile.length) {
+      let rows = '';
+      const max = byProfile[0].totalMs || 1;
+      for (const p of byProfile) {
+        const color = expColor(p.color, c.accent);
+        rows += expBarRow('<span style="color:' + color + ';font-weight:600">' + escapeHtml(p.name || p.profileId || '') + '</span>',
+          p.totalMs / max,
+          formatDurationMs(p.totalMs) + ' · ' + String(p.sessions || 0) + ' ' + tOr('report.sessions_count', '次'),
+          color);
+      }
+      parts.push('<div class="card"><div class="sec-title">' + escapeHtml(tOr('report.by_profile', '各账号时长')) + '</div>' + rows + '</div>');
+    }
+
+    // 4) Hour of day
+    const byHour = Array.isArray(data.byHour) && data.byHour.length === 24 ? data.byHour.map(Number) : null;
+    if (byHour) {
+      const chart = expColumns(byHour, [0, 6, 12, 18, 23], (i) => String(i));
+      let note = '';
+      if (chart.anyData) {
+        note = '<div class="note">' + escapeHtml(tOr('report.golden_hour', '黄金时段') + ' ' +
+          chart.peak + ':00–' + ((chart.peak + 1) % 24) + ':00 · ' + formatDurationMs(byHour[chart.peak])) + '</div>';
+      }
+      parts.push('<div class="card"><div class="sec-title">' + escapeHtml(tOr('report.by_hour', '时段分布')) + '</div>' + chart.html + note + '</div>');
+    }
+
+    // 5) Day of week
+    const byWeekday = Array.isArray(data.byWeekday) && data.byWeekday.length === 7 ? data.byWeekday.map(Number) : null;
+    if (byWeekday) {
+      const names = i18n.t('common.weekday_short');
+      const nameAt = (i) => (Array.isArray(names) && names[i] != null) ? String(names[i]) : String(i);
+      const chart = expColumns(byWeekday, null, nameAt);
+      parts.push('<div class="card"><div class="sec-title">' + escapeHtml(tOr('report.by_weekday', '星期分布')) + '</div>' + chart.html + '</div>');
+    }
+  }
+
+  const stampDay = beijingDay();
+  const d = new Date(Date.now() + BJ_OFFSET);
+  const hh = ('0' + d.getUTCHours()).slice(-2) + ':' + ('0' + d.getUTCMinutes()).slice(-2);
+  parts.push('<div class="foot">' +
+    escapeHtml(tOr('report.export_note', '数据全部来自本机，未上传任何地方。')) + '<br>' +
+    escapeHtml(tOr('report.export_stamp', '生成于') + ' ' + stampDay + ' ' + hh + ' (UTC+8)') +
+    '</div>');
+
+  return '<!DOCTYPE html>\n<html lang="' + (isZhLang() ? 'zh-CN' : 'en') + '">\n<head>\n' +
+    '<meta charset="utf-8">\n' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
+    '<title>' + escapeHtml(heading) + '</title>\n' +
+    '<style>' + exportStylesheet() + '</style>\n' +
+    '</head>\n<body>\n<div class="wrap">\n' + parts.join('\n') + '\n</div>\n</body>\n</html>\n';
+}
+
+function reportHasData() {
+  return !!(reportData && Number(reportData.totalMs) > 0);
+}
+function syncReportExportButton() {
+  const exp = $('report-export');
+  if (!exp) return;
+  exp.textContent = tOr('report.export', '导出报告');
+  exp.disabled = !reportHasData();
+  exp.title = exp.disabled
+    ? tOr('report.empty', '这段时间还没有游玩记录。')
+    : tOr('report.export_tip', '导出成一个 HTML 文件，保存到桌面');
+}
+let reportExportBusy = false;
+async function exportReportHtml() {
+  if (reportExportBusy || !reportHasData()) return;
+  reportExportBusy = true;
+  try {
+    const html = buildReportHtml(reportData, reportScope, reportKey);
+    const res = await ipcRenderer.invoke('report:export-html', html, reportKey);
+    if (res && res.ok) showToast(tOr('report.export_done', '已保存到桌面'));
+    else showToast(tOr('report.export_failed', '导出没成功') + (res && res.error ? ' · ' + res.error : ''));
+  } catch (e) {
+    showToast(tOr('report.export_failed', '导出没成功'));
+  } finally {
+    reportExportBusy = false;
+  }
+}
+// Kept ready for the day the report grows a picture export. Nothing but the
+// alt-click below reaches it yet, so the HTML path stays the plain one-click action.
+async function captureReportPng() {
+  if (reportExportBusy || !reportHasData()) return;
+  reportExportBusy = true;
+  try {
+    const host = $('report-body');
+    const box = host ? host.getBoundingClientRect() : null;
+    const rect = box
+      ? { x: box.left, y: box.top, width: box.width, height: box.height, name: reportKey }
+      : { name: reportKey };
+    const res = await ipcRenderer.invoke('report:capture-png', rect);
+    if (res && res.ok) showToast(tOr('report.export_done', '已保存到桌面'));
+    else showToast(tOr('report.export_failed', '导出没成功') + (res && res.error ? ' · ' + res.error : ''));
+  } catch (e) {
+    showToast(tOr('report.export_failed', '导出没成功'));
+  } finally {
+    reportExportBusy = false;
+  }
+}
+if ($('report-export')) {
+  $('report-export').addEventListener('click', (ev) => {
+    if (ev.altKey) captureReportPng();
+    else exportReportHtml();
+  });
+}
+
+if ($('report-scope')) {
+  $('report-scope').addEventListener('click', (ev) => {
+    const tab = ev.target && ev.target.closest ? ev.target.closest('.seg-tab') : null;
+    if (tab && tab.dataset.scope) setReportScope(tab.dataset.scope);
+  });
+}
+if ($('report-period')) {
+  $('report-period').addEventListener('change', (ev) => {
+    reportKey = ev.target.value;
+    loadReport();
+  });
 }
 
 // ---------- Notes ----------
@@ -3592,7 +5420,18 @@ $('lib-sort').addEventListener('change', (e) => { libSort = e.target.value; rend
 ipcRenderer.on('action', (_e, action, arg) => {
   const t = activeTab();
   switch (action) {
-    case 'new-tab': createTab(arg || homeUrl); break;
+    case 'new-tab': {
+      // No URL: the New Tab menu item / \u2318T. A cold start, so site rules apply.
+      if (!arg) { createTab(newTabUrl()); break; }
+      // With a URL this is main.js forwarding a page's new-window. The webview-level
+      // listener in createTab() sees the same click and knows the source tab, so give it
+      // a moment to claim the open; this copy only opens anything if that never ran.
+      const linkUrl = arg;
+      setTimeout(() => {
+        if (claimNewWindow('action', linkUrl)) createTab(linkUrl);
+      }, NEW_WINDOW_GRACE_MS);
+      break;
+    }
     case 'close-tab': if (t) closeTab(t.id); break;
     case 'detach-tab': if (t) detachTab(t.id); break;
     case 'next-tab': {
@@ -3617,8 +5456,46 @@ ipcRenderer.on('action', (_e, action, arg) => {
     case 'toggle-game-mode': setGameMode(!document.body.classList.contains('game-mode')); break;
     case 'goto-tasks': setRoute('tasks'); break;
     case 'inspect-webview': { if (t) { try { t.webview.openDevTools(); } catch (e) {} } break; }
-    case 'new-window': ipcRenderer.invoke('window:open', null, windowProfileId); break;
+    case 'new-window': ipcRenderer.invoke('window:open', (window.XZAutoLogin && XZAutoLogin.quickUrlFor(windowProfileId)) || null, windowProfileId); break;
+    // Cmd+1..8 follow the profile order the user set on the Profiles page.
+    case 'switch-account': switchToAccountSlot(Number(arg)); break;
+    case 'park-others': parkOtherWindows(); break;
+    case 'scatter-tile': scatterTabsAndTile(); break;
   }
+});
+async function switchToAccountSlot(slot) {
+  if (!Number.isFinite(slot) || slot < 1) return;
+  const p = profiles[slot - 1];
+  if (!p) return;
+  if (window.XZFocus && XZFocus.switchToProfile(p.id)) return;
+  let list = [];
+  try { list = await ipcRenderer.invoke('windows:list'); } catch (e) {}
+  const match = (Array.isArray(list) ? list : []).find(w => w && String(w.profileId) === p.id);
+  if (match) ipcRenderer.invoke('windows:focus', match.winId).catch(() => {});
+  else ipcRenderer.invoke('window:open', (window.XZAutoLogin && XZAutoLogin.quickUrlFor(p.id)) || homeUrl, p.id).catch(() => {});
+}
+// Main resolves the calling window from the IPC sender. The old path asked
+// windows:list for the `focused` flag, which was routinely stale by the time the
+// answer came back — that is why Cmd+Shift+H did nothing.
+function parkOtherWindows() {
+  runWindowAction('park', $('strip-park-others'));
+}
+
+// ---------- cross-window sync ----------
+// Fires for our own writes too, so every consumer here has to be idempotent.
+ipcRenderer.on('profiles:changed', (_e, list) => {
+  if (!Array.isArray(list)) return;
+  profiles = list;
+  refreshProfileChip();
+  updateCounts();
+  repaintAllTabLabels();   // "<account> | <page>" has to follow renames and recolours
+  if (window.XZFocus) XZFocus.onProfilesChanged();
+  document.dispatchEvent(new CustomEvent('xz:profiles', { detail: list }));
+  if (currentRoute === 'profiles') renderProfiles();
+});
+ipcRenderer.on('windows:changed', (_e, list) => {
+  applyWindowList(list);
+  refreshLayoutButtons();
 });
 
 // ---------- boot ----------
@@ -3628,11 +5505,27 @@ ipcRenderer.on('action', (_e, action, arg) => {
   refreshProfileChip();
   updateSpeedIndicator();
   updateAudioButtons();
+  setGlass(settings.glassEffect !== false);
   setSidebar(!!settings.sidebarCollapsed);
   setQuickNoteVisible(settings.showQuickNote !== false, false);
   const init = await ipcRenderer.invoke('app:init');
   windowProfileId = (init && init.profileId) || settings.defaultProfileId || (profiles[0] && profiles[0].id);
   refreshProfileChip();
-  if (init && init.initialUrl) createTab(init.initialUrl);
-  else setRoute('home');
+  refreshRunningProfiles();
+  refreshLayoutButtons();
+  paintLocalStrings();
+  updateTabStripState();
+  sendWindowMetaNow();
+  document.dispatchEvent(new CustomEvent('xz:boot', { detail: init || null }));
+  // A window opened *for* an account (profile card, ⌘1..8, detach, open-in-all) carries
+  // its profileId here: that is an explicit choice and must outrank any site rule, or
+  // "open this in B" could land on A.
+  if (init && init.restore && window.XZSession && XZSession.restoreWindow(init.restore)) {
+    // 会话恢复：标签页由 session-client.js 按快照创建，首个 tab 同步建出以便发出 window:ready。
+  } else if (init && init.initialUrl) createTab(init.initialUrl, init.profileId ? { profileId: init.profileId } : null);
+  else {
+    setRoute('home');
+    // No game to wait for in a plain shell window — don't hold up main's open queue.
+    signalWindowReady();
+  }
 })();

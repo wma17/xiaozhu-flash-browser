@@ -1,0 +1,238 @@
+/* ============================================================================
+   onboarding.css — 首启引导与空状态 / WP5（第三轮功能 7，方案 §2.7）
+   ----------------------------------------------------------------------------
+   由 onboarding.js（window.XZOnboard）建出来的两类元素：
+     A. #xz-onboard —— 首次启动时铺在首页上的三步引导卡片。
+     B. .ph-actions / .ph-hint / .profile-hint-card —— 给现有空状态
+        （.placeholder）补上的动作按钮与提示卡。
+
+   四条硬规矩：
+
+   1. 不用 backdrop-filter，不用 animation，不写 transition。
+      前者的理由见 index.html 66–80 / 2748–2760；后两者是因为引导虽然只在
+      home 路由出现（那里 body 没有 .in-browser，index.html 2825–2876 的门控
+      不会挡住动画），但一个铺满窗口的不透明卡片没有任何理由动，而空状态里的
+      按钮就在游戏窗口的同一个进程里画——少一次合成是一次。
+
+   2. 颜色、圆角、阴影、字号一律走 token，不写字面量。浮层语言的 token 全部
+      来自 ui-tokens.css（--ov-* / --z-*），间距与控件高度来自 index.html 的
+      --s-* / --ctl-*。本文件必须在 ui-tokens.css 之后加载。
+
+   3. 引导卡片的底是不透明的 --cream-bg。它是 position:fixed 铺满窗口的，
+      底下就是 #webviews-container；半透明会让隐藏着的 webview 透出来。
+      不过引导只在 home 路由显示（onboarding.js 自己把关），那里
+      #webviews-container 的 visibility 已经是 hidden。
+
+   4. 模块缺席时本表零影响：这里的每一条规则要么挂在 #xz-onboard 下，要么
+      命中 .ph-actions / .ph-hint / .profile-hint-card —— 这三个类名在
+      index.html 与 focus-mode.css 里都不存在，只有 onboarding.js 会建。
+   ========================================================================== */
+
+
+/* ===== 1. 空状态的动作行 ================================================
+   .placeholder（index.html 1098）本来只有吉祥物 + 一行字，是个死胡同：
+   用户看懂了"这里是空的"，却没有任何一个能点的东西。.ph-actions 追加在
+   .ph-text 之后，仍在 .placeholder 的 flex 列里居中。 */
+.ph-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--ov-gap);
+  margin-top: var(--s-3);
+}
+/* index.html 没有裸 <button> 的基础配方（.tool-row / .settings-row 各写各的），
+   所以这里照 .settings-row button（1755）那一份抄，只把字面量换成 token。
+   盒子（字号 / 高度 / 圆角 / 边）给所有按钮，底色与墨色单独一条 —— 见下。 */
+.ph-actions button,
+.profile-hint-card button {
+  font: inherit;
+  font-size: var(--ov-text-size);
+  height: var(--ctl-lg);
+  padding: 0 var(--s-3);
+  border-radius: var(--ov-radius-ctl);
+  border: 1px solid var(--ov-border);
+  cursor: default;
+}
+/* :not(.primary) 是必须的，不是洁癖：`.ph-actions button` 的专指度是 (0,1,1)，
+   和 index.html 2782 的 `button.primary` 完全相同，而本文件加载得更晚——底色
+   写在上面那条里的话，主按钮的强调色渐变会被这一句白底盖掉。 */
+.ph-actions button:not(.primary),
+.profile-hint-card button:not(.primary) {
+  background: var(--panel-white);
+  color: var(--ov-ink);
+}
+.ph-actions button:not(.primary):hover,
+.profile-hint-card button:not(.primary):hover {
+  background: var(--hover-bg);
+  color: var(--ov-title-ink);
+}
+.ph-actions button:not(.primary):active,
+.profile-hint-card button:not(.primary):active {
+  background: var(--soft-wheat);
+}
+/* 「功能开着 / 主动作」= 强调色填充 + --on-primary 文字（ui-tokens.css 第 6 节
+   的甲组）。背景由 index.html 2782 的 button.primary 渐变配方提供，这里只补
+   它没写的墨色与边框——和 .lib-card .lc-actions button.primary（1683）等
+   现有用例的写法完全一致。 */
+.ph-actions button.primary,
+.profile-hint-card button.primary {
+  color: var(--ov-accent-ink);
+  border-color: transparent;
+  font-weight: 600;
+}
+/* 一句补充说明，排在按钮下面。 */
+.ph-hint {
+  margin-top: var(--s-2);
+  font-size: var(--ov-meta-size);
+  color: var(--ov-muted);
+  line-height: var(--lh-read);
+}
+
+
+/* ===== 2. 「再建一个档案」提示卡 =========================================
+   档案页永远不空（ensureProfiles 保底一个），所以它没有空状态，也就从来
+   没人告诉用户"多开需要第二个档案"。只有 1 个档案时，在列表末尾补一张卡。
+   虚线边把它和真正的档案卡区分开：它不是一个账号，是一句话加一个按钮。 */
+.profile-hint-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--ov-gap);
+  margin-bottom: var(--s-2);
+  padding: var(--s-3) var(--ov-pad);
+  background: var(--ov-bg);
+  border: 1px dashed var(--ov-border);
+  border-radius: var(--ov-radius);
+  color: var(--ov-muted);
+  font-size: var(--ov-text-size);
+  line-height: var(--lh-read);
+}
+.profile-hint-card .ph-card-text {
+  flex: 1;
+  min-width: 220px;
+}
+
+
+/* ===== 3. 首启引导 ======================================================= */
+
+/* 铺满窗口的不透明底。z-index 用 --z-onboard(120)：高过全部常规浮层与菜单，
+   低过 toast(200)——引导期间的 toast（比如站点归属提示）仍要看得见。 */
+#xz-onboard {
+  position: fixed;
+  left: 0; right: 0; top: 0; bottom: 0;
+  z-index: var(--z-onboard);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-6);
+  background: var(--cream-bg);
+  color: var(--ov-ink);
+  font-size: var(--ov-text-size);
+  -webkit-user-select: none;
+  user-select: none;
+}
+#xz-onboard.visible { display: flex; }
+
+/* 卡片本体：与 .menu / #toast / #save-prompt 同一套材质（--ov-*），只是大一号。 */
+#xz-onboard .ob-card {
+  width: 100%;
+  max-width: 520px;
+  box-sizing: border-box;
+  padding: var(--s-6);
+  background: var(--ov-bg);
+  border: 1px solid var(--ov-border);
+  border-radius: var(--ov-radius);
+  box-shadow: var(--ov-shadow);
+}
+
+#xz-onboard .ob-step {
+  font-size: var(--ov-meta-size);
+  color: var(--ov-muted);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: var(--s-1);
+}
+#xz-onboard .ob-title {
+  font-size: var(--fs-head);
+  font-weight: 600;
+  color: var(--ov-title-ink);
+  margin-bottom: var(--s-2);
+}
+#xz-onboard .ob-body {
+  color: var(--ov-muted);
+  line-height: var(--lh-read);
+  margin-bottom: var(--s-4);
+}
+
+/* 输入框：照 #save-prompt .sp-row input（2188）的配方，字面量换 token。 */
+#xz-onboard .ob-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  height: var(--ov-ctl);
+  padding: 0 10px;
+  font: inherit;
+  color: var(--ov-ink);
+  background: var(--panel-white);
+  border: 1px solid var(--ov-border);
+  border-radius: var(--ov-radius-ctl);
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+#xz-onboard .ob-input:focus {
+  border-color: var(--ov-accent);
+  background: var(--field-focus-bg);
+  box-shadow: var(--focus-halo);
+}
+
+/* 选色：直接复用档案页的 .color-choice（index.html 2168），所以尺寸、圆角和
+   选中环与档案卡里的那一排逐像素相同，这里只排一下队。 */
+#xz-onboard .ob-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ov-gap);
+  margin-top: var(--s-3);
+}
+
+#xz-onboard .ob-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--ov-gap);
+  margin-top: var(--s-6);
+}
+#xz-onboard .ob-spacer { flex: 1; }
+#xz-onboard button {
+  font: inherit;
+  font-size: var(--ov-text-size);
+  height: var(--ctl-lg);
+  padding: 0 var(--s-4);
+  border-radius: var(--ov-radius-ctl);
+  border: 1px solid var(--ov-border);
+  cursor: default;
+}
+/* 同上：#xz-onboard button 是 (1,0,1)，比 index.html 2782 的 button.primary
+   (0,1,1) 更专指，底色写在上面那条里会把主按钮的强调色渐变整个盖掉。 */
+#xz-onboard button:not(.primary) {
+  background: var(--panel-white);
+  color: var(--ov-ink);
+}
+#xz-onboard button:not(.primary):hover { background: var(--hover-bg); color: var(--ov-title-ink); }
+#xz-onboard button:not(.primary):active { background: var(--soft-wheat); }
+#xz-onboard button.primary {
+  color: var(--ov-accent-ink);
+  border-color: transparent;
+  font-weight: 600;
+}
+/* 「跳过」是最轻的出口：没有边框，只有次要墨色，但仍是一个正常大小的按钮
+   （不是一个 11px 的小字链接）——它是三个动作里唯一无法撤销的那个。 */
+#xz-onboard button.ob-quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ov-muted);
+  padding: 0 var(--s-2);
+}
+#xz-onboard button.ob-quiet:hover { background: var(--hover-bg); color: var(--ov-title-ink); }
+
+/* 步骤之间靠这个类整块显隐；不用 [hidden]，因为本 document 没有 [hidden] 的重置。 */
+#xz-onboard .ob-off { display: none; }

@@ -1,0 +1,145 @@
+/* ============================================================================
+   status-bar.css — 状态条（第三轮 WP2，配 status-bar.js / #status-bar）
+   ----------------------------------------------------------------------------
+   规矩（与 index.html 的开发者笔记、方案 §2.6-7 一致）：
+     · 只用 index.html :root 里已有的 token，不写任何字面量颜色 / 圆角 / 阴影，
+       所以十个内置主题 + 自定义主题自动跟随。
+     · 一条会动的规则都没有（既不补间、也不循环）。状态条就贴在游戏正上方那一行，
+       index.html 的门控（:not(.in-browser):not(.game-mode)）本来就会在游戏出现的
+       一瞬间关掉全表的运动，这里干脆一条都不写。
+     · 不用那个会拉背景做模糊的滤镜属性：它在 <webview> 上方会静默失效，还会把
+       webview 拉进 backdrop root 让 Retina 上的游戏变软。--panel-white 本来就不透明。
+     · Chromium 87 能用的语法：flex gap（84+）、font-variant-numeric、
+       CSS 自定义属性带 var() 兜底。没有 :is()/:where()、没有 aspect-ratio、
+       没有 gap 的逻辑简写。
+
+   布局：#status-bar 是 #app（flex column）的第 4 个子元素，flex:0 0 18px。
+   它在文档流里占位置，#layout / #main / #webviews-container 自动缩小 18px，
+   所以**永远不会盖住一个游戏像素**。游戏模式（body.game-mode）只收顶栏与侧栏，
+   不动 #app 的其它子元素，状态条照常显示 —— 打游戏时正是要看负载的时候。
+   ============================================================================ */
+
+/* 默认不存在。status-bar.js 按 settings.statusBar 加 .on。 */
+#status-bar { display: none; }
+
+#status-bar.on {
+  display: flex;
+  flex: 0 0 18px;
+  height: 18px;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 0 var(--s-2);
+  box-sizing: border-box;
+  font-family: var(--font-ui);
+  font-size: var(--fs-micro);
+  line-height: 18px;
+  /* 数字每秒都在变；等宽数字让它不左右抖。 */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-feature-settings: "tnum";
+  color: var(--text-secondary);
+  background: var(--panel-white);
+  border-top: 1px solid var(--glass-border);
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  /* 顶栏是拖拽区，这一行不是；点账号点要能真的点到。 */
+  -webkit-app-region: no-drag;
+}
+
+#status-bar .sb-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: 0;
+}
+#status-bar .sb-spacer {
+  flex: 1 1 auto;
+  min-width: var(--s-2);
+}
+/* 帧率与负载是固定宽度的事实，先保证它们完整；账号点多了才挤。 */
+#status-bar #sb-fps { flex: 0 0 auto; }
+#status-bar #sb-load {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#status-bar #sb-accounts {
+  flex: 0 1 auto;
+  gap: var(--s-1);
+  overflow: hidden;
+}
+
+/* ---- 每个账号一个小胶囊：颜色点 + 档案名 ---- */
+#status-bar .sb-acct {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 14px;
+  padding: 0 5px;
+  max-width: 120px;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  cursor: default;
+  overflow: hidden;
+}
+/* --acct 由 status-bar.js 按档案颜色 setProperty；没有档案时退回次要文字色。 */
+#status-bar .sb-acct .dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--acct, var(--text-secondary));
+}
+#status-bar .sb-acct .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 加载中：给圆点套一圈琥珀光晕。不用 spinner —— 游戏在屏幕上时不要任何动画。 */
+#status-bar .sb-acct[data-state="loading"] .dot {
+  box-shadow: 0 0 0 2px var(--warning-bg);
+}
+
+/* 当前标签页：强调边框 + 更实的文字。先于故障态声明，故障色能盖过它，
+   于是「正在出问题的那个账号」在任何情况下都看得出来。 */
+#status-bar .sb-acct[data-active="1"] {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* 故障态一律琥珀警示（与 .tool-ind.on / .speed-ind.hot 同一套「非默认状态」词汇）。 */
+#status-bar .sb-acct[data-state="failed"],
+#status-bar .sb-acct[data-state="crashed"],
+#status-bar .sb-acct[data-state="plugin"],
+#status-bar .sb-acct[data-state="hung"] {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--deep-orange);
+}
+
+/* ---- 右端的 ✕：唯一可点的按钮 ---- */
+#status-bar .sb-btn {
+  flex: 0 0 auto;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+#status-bar .sb-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+#status-bar .sb-btn:active {
+  background: var(--soft-wheat);
+  color: var(--dark-brown);
+}
+
+/* 游戏模式下这一行仍在（就是要在），只是把左右留白再收一点，
+   给 18px 里的内容多留位置。 */
+body.game-mode #status-bar.on { padding: 0 var(--s-1); }

@@ -1,0 +1,272 @@
+/* ============================================================================
+   ui-tokens.css — 统一浮层语言 / WP5（第三轮功能 6，方案 §2.6）
+   ----------------------------------------------------------------------------
+   加载顺序：index.html 的 <style> → focus-mode.css → 本文件 → 各模块 CSS。
+   本文件做两件事，仅此两件：
+
+     A. 定义浮层设计语言的 token（--ov-* / --hud-* / --z-*）。新模块
+        （command-palette / status-bar / onboarding）只准用这些 token 和
+        index.html 已有的 token，不准写字面量颜色、圆角、阴影。这是包 5 与
+        包 1 / 包 2 的契约。
+     B. 把现有浮层里漂移的几处收敛回同一套语言。收敛靠「后加载的样式表重新
+        声明同一条属性」，不改 index.html、不改 focus-mode.css、不改
+        aim-assist.js。
+
+   改这个文件的人先读这四条：
+
+   1. 不用 backdrop-filter，一处都不用。index.html 66–80 与 2748–2760 写清楚
+      了原因：backdrop-filter 画在 <webview> 上方会静默失效（插件的像素不在本
+      document 的 backdrop 里），而把 webview 拖进 backdrop root 会让 Retina
+      上的游戏变软。本文件反而要去掉唯一一处盖在游戏上的 backdrop-filter
+      （#measure-panel，见第 3 节）。
+
+   2. 不写 animation / transition。游戏在屏幕上时 body.in-browser，
+      index.html 2825–2876 的门控选择器本来就把动画关掉了；这里不新增任何
+      需要门控的东西，门控规则也就不必再复制一份。
+
+   3. 只改「材质」：圆角、边框颜色、阴影、字号、颜色、层位。除了第 4 节把三个
+      内联样式面板的 padding 从 14px 16px 收回 token 值 16px（它们是固定宽度
+      的浮层，内边距变化不影响任何命中区域），本文件不碰任何 width / height /
+      display / position / pointer-events。绝不影响布局与命中测试。
+
+   4. 只有第 4 节用 !important，而且只因为那三个面板把盒子写在 style 属性上，
+      没有任何样式表规则能压过内联样式——这与 index.html 2733–2746
+      「the one place !important is warranted」是同一条豁免，范围同样限定在
+      材质（这里是圆角与内边距），不碰布局。其余每一节都靠「相同专指度 +
+      更晚加载」取胜；给 aim-assist 的规则加 `body ` 前缀，是因为
+      aim-assist.js 在运行时把它的 <style> 追加到 <head> 末尾，比本文件晚，
+      同专指度压不过它——加一个元素选择器是压过它所需的最小增量。
+
+   与方案 §2.6 的两处刻意偏离（都记在下面对应的 token 上）：
+     - --ov-border 取 var(--glass-border) 而不是 var(--border)；
+     - --ov-shadow 取 shadow-lg + 顶部 1px 内高光而不是 shadow-lg + elev-2。
+     理由见 token 处的注释：index.html 2712–2724 的「浮动层」一节已经把七个
+     现有浮层的边与影统一成了玻璃配方，方案 §1.6 记录的是它之前的基础规则。
+     token 若指向基础值，新浮层反而会和现有浮层不一样——那与本功能的目的相反。
+   ========================================================================== */
+
+
+/* ===== 1. Token ==========================================================
+   全部派生自 index.html 已有的主题变量，所以换主题、换自定义主题时自动跟随。
+   它们是布局 / 材质常量，不是颜色变量，因此不进 renderer.js 的
+   CUSTOM_THEME_STYLE_PROPS，也不写进任何 :root[data-theme] 块。 */
+:root {
+  /* --- 浮层：菜单、弹出面板、模态面板、命令面板、引导 -------------------
+     这一组是「在界面之上、可能压在游戏之上」的不透明面板。底色用不透明的
+     --panel-white-2 而不是 --glass-pop：新浮层不许用 backdrop-filter，
+     一张没有模糊的半透明纸压在游戏画面上会让文字和游戏互相干扰。 */
+  --ov-bg: var(--panel-white-2);
+  /* 偏离方案：用 --glass-border 而非 --border。index.html 2712–2724 已把
+     .menu / #toast / #save-prompt / #account-picker / #profile-open-modal /
+     #quick-note-popover 六个浮层的 border-color 统一成 --glass-border，
+     2739–2746 又把三个内联面板一起并了进去。新浮层要和它们并排看不出接缝，
+     就必须取同一个值。 */
+  --ov-border: var(--glass-border);
+  /* 偏离方案：同上，这是七个现有浮层实际画出来的影子（外投影 + 顶部 1px
+     内高光），内高光正是让浮层有「厚度」的那一笔。 */
+  --ov-shadow: var(--shadow-lg), inset 0 1px 0 var(--glass-sheen);
+  --ov-radius: var(--r-lg);        /* 浮层本体 12px */
+  --ov-radius-item: var(--r-sm);   /* 浮层内的行 / 条目 7px */
+  --ov-radius-ctl: var(--r-sm);    /* 浮层内的输入框 / 按钮 7px */
+  --ov-pad: var(--s-4);            /* 浮层内边距 16px */
+  --ov-gap: var(--s-2);            /* 浮层内元素间距 8px */
+  --ov-ctl: var(--ctl-md);         /* 浮层内控件高度 28px */
+  --ov-title-size: var(--fs-body);
+  --ov-text-size: var(--fs-small);
+  --ov-meta-size: var(--fs-caption);
+  --ov-ink: var(--text-primary);
+  --ov-muted: var(--text-secondary);
+  --ov-title-ink: var(--dark-brown);
+  /* 「功能开着」的唯一表达：强调色填充 + --on-primary 文字。见第 6 节。 */
+  --ov-accent: var(--main-orange);
+  --ov-accent-ink: var(--on-primary);
+  --ov-accent-deep: var(--deep-orange);
+  /* 「有非默认设置」的唯一表达：琥珀警示。.tool-ind.on / .speed-ind.hot /
+     .tab.muted 已经在用这一对，这里只是给它命名，供新模块引用。 */
+  --ov-warn-bg: var(--warning-bg);
+  --ov-warn-border: var(--warning-border);
+  --ov-warn-ink: var(--deep-orange);
+
+  /* --- HUD：压在游戏像素上的深色浮层（测距、竞技辅助、状态条气泡） -------
+     永远深色、永远不跟主题走（下面的游戏画面不属于任何调色板），
+     永远不用 backdrop-filter。底色 --hud-bg 已是 .74 不透明。 */
+  --hud-radius: var(--r-lg);
+  --hud-radius-item: var(--r-xs);
+  --hud-shadow: 0 12px 34px var(--shadow-tint-2);
+
+  /* --- 层位阶梯 ---------------------------------------------------------
+     一处写清楚，省得下一个浮层再去翻整张表。前十项是现状的复述（值与
+     index.html / focus-mode.css 里的字面量逐一相同），后三项是本轮新增的
+     位置：HUD 落到菜单之下（原来 #aim-panel 与 .menu 同为 60，互相压），
+     引导在所有常规浮层之上、toast 之下，命令面板再高一层。 */
+  --z-focus: 5;        /* #focus-layer */
+  --z-chrome: 6;       /* #tab-strip */
+  --z-compat: 20;      /* #compat-banner */
+  --z-measure: 25;     /* #measure-overlay */
+  --z-fab: 40;         /* #quick-note-fab */
+  --z-popover: 50;     /* #save-prompt / #account-picker / #lib-edit / #add-pw-prompt */
+  --z-hud: 58;         /* #aim-panel —— 本轮从 60 降下来 */
+  --z-menu: 60;        /* .menu */
+  --z-hud-modal: 61;   /* #aim-cal */
+  --z-onboard: 120;    /* onboarding.js 的 #xz-onboard */
+  --z-palette: 150;    /* command-palette.js 的 #xz-palette */
+  --z-toast: 200;      /* #toast —— 永远在最上面 */
+}
+
+
+/* ===== 2. 竞技辅助面板（aim-assist.js 926–992 注入的样式） ================
+   §1.6-1 记录的问题：那段样式引用了四个变量，其中三个（--text / --accent /
+   --field-bg）在本 document 里根本不存在（只在独立的 aim-window.html 里
+   定义），一个（--border）存在但属于浅色主题——rgba(30,104,124,.20) 画在
+   深色 HUD 上几乎看不见。于是面板的边框近乎消失，强调块回落到硬编码的
+   #c8783c，无视主题。
+
+   修法：自定义属性在同一个元素上声明，就对该元素上以及后代的 var() 生效，
+   而且与「哪条规则更晚」无关（自定义属性按专指度层叠，这条 #aim-panel 与
+   aim-assist 的 #aim-panel 同为 (1,0,0)，但 aim-assist 那条压根没声明这四个
+   变量，所以这里是唯一的声明）。一条规则同时修好边框、文字、输入框底色和
+   强调色四处。 */
+#aim-panel {
+  --border: var(--hud-line-2);    /* 替换：面板内一切 var(--border) 的取值，
+                                     由浅色主题的边线换成 HUD 的白色描边 */
+  --text: var(--hud-ink);         /* 替换：面板文字色的兜底 #f4ece1 */
+  --accent: var(--main-orange);   /* 替换：强调块兜底 #c8783c → 主题强调色 */
+  --field-bg: var(--hud-fill);    /* 替换：输入框底色兜底 rgba(0,0,0,.3) */
+}
+/* 下面每条都带 `body ` 前缀：aim-assist.js 运行时把同名规则追加到 <head>
+   末尾，比本文件晚，同专指度压不过它。 */
+body #aim-panel {
+  border-radius: var(--hud-radius);   /* 替换 12px 字面量 → 与测距面板同一圆角 */
+  box-shadow: var(--hud-shadow);      /* 替换 0 10px 30px rgba(0,0,0,.35) → 与测距面板同一投影 */
+  font-family: var(--font-ui);        /* 补齐：原来靠继承 body，写明后与其它浮层同一字体栈 */
+  font-size: var(--ov-text-size);     /* 替换 12px 字面量 → 字号走 token（同值） */
+  z-index: var(--z-hud);              /* 替换 60 → 58，不再与 .menu 同层互相压 */
+}
+/* 面板内的小圆角：原来 6px / 6px / 6px / 5px / 6px / 6px / 6px / 4px 八种写法，
+   统一到 --hud-radius-item（5px，= --r-xs，与 .aim-pad-btn 原本的取值一致）。 */
+body #aim-panel .aim-wind input,
+body #aim-panel #aim-thumb,
+body #aim-panel #aim-windthumb,
+body #aim-panel .aim-pad-btn,
+body #aim-panel .aim-pick,
+body #aim-panel button.aim-btn,
+body #aim-panel .aim-cell,
+body #aim-panel .aim-no {
+  border-radius: var(--hud-radius-item);
+}
+/* 强调色填充上的文字：--accent 现在是主题强调色，文字必须跟着换成保证对比度的
+   --on-primary（原来靠 color:inherit 拿到 HUD 的米白，在浅色强调上会糊）。 */
+body #aim-panel .aim-pick,
+body #aim-panel .aim-cell.best,
+body #aim-panel button.aim-btn.on {
+  color: var(--ov-accent-ink);
+}
+/* 标定遮罩：层位写成 token（同值 61），提示条从三处硬编码回到 HUD 材质。 */
+body #aim-cal {
+  z-index: var(--z-hud-modal);
+}
+body #aim-cal .aim-cal-tip {
+  background: var(--hud-bg);              /* 替换 rgba(0,0,0,.8) */
+  border: 1px solid var(--hud-line-2);    /* 补齐：原来没有边，浮在深色游戏上时没有厚度 */
+  border-radius: var(--r-sm);             /* 替换 8px → 7px，与全局控件圆角一致 */
+  font-size: var(--ov-title-size);        /* 替换 13px 字面量（同值） */
+  color: var(--hud-ink);                  /* 替换 #fff → HUD 墨色 */
+}
+
+
+/* ===== 3. 测距面板 =======================================================
+   §1.6-2：#measure-panel 是全应用唯一一处「盖在游戏上还开着 backdrop-filter」
+   的浮层，而 body.glass-off 的关闭列表（index.html 2880–2900）没有包含它，
+   所以用户连关都关不掉。--hud-bg 已经是 .74 不透明，去掉模糊后可读性不变，
+   换来的是游戏像素不被拖进 backdrop root。 */
+#measure-panel {
+  -webkit-backdrop-filter: none;   /* 替换 saturate(180%) blur(20px) */
+  backdrop-filter: none;           /* 同上；两种拼写都要写，Chromium 87 认前者 */
+}
+
+
+/* ===== 4. 三个内联样式面板与散落的 8px 控件 ==============================
+   §1.6-3：#lib-edit / #account-edit-modal / #add-pw-prompt 的盒子写在 style
+   属性上（border-radius:14px; padding:14px 16px），它们内部以及设置页、档案页
+   里另有 19 处 border-radius:8px 的输入框与按钮——而全局 token 是面板 12px、
+   控件 7px。内联样式没有任何样式表规则能压过，这里是本文件唯一用 !important
+   的地方，与 index.html 2733–2746 同一条豁免，范围只有圆角与内边距。
+
+   边框颜色不在这里改：index.html 2739–2746 已经把这三个面板的 border-color
+   用 !important 统一成了 --glass-border（也就是 --ov-border），内联的
+   --border-strong 早已被压掉，再写一遍只是多一个 !important。 */
+#lib-edit,
+#account-edit-modal,
+#add-pw-prompt {
+  border-radius: var(--ov-radius) !important;   /* 替换内联 14px → 12px，与 .menu / #toast 同圆角 */
+  padding: var(--ov-pad) !important;            /* 替换内联 14px 16px → 16px，与 #save-prompt 同内边距 */
+}
+/* 控件圆角：内联 8px → 7px。#account-edit-modal 的 .sp-row 输入框本来就走
+   var(--r-sm)，列在这里是为了让「这个面板里的控件都是 7px」有一条能被 grep
+   到的规则，对它们是同值无变化。 */
+#lib-edit input,
+#lib-edit textarea,
+#lib-edit button,
+#account-edit-modal input,
+#account-edit-modal select,
+#account-edit-modal button,
+#add-pw-prompt input,
+#add-pw-prompt select,
+#add-pw-prompt button,
+#profile-create-btn,
+#pw-add-btn,
+#id-name,
+#id-sub,
+#id-bubble,
+#id-home-sub,
+#setting-new-tab-url {
+  border-radius: var(--ov-radius-ctl) !important;
+}
+
+
+/* ===== 5. 浮层材质的规范落地点 ===========================================
+   下面这些与现状同值，写在这里不是为了改什么，而是让「浮层圆角 = --ov-radius、
+   层位 = --z-*」在样式表里有一条可被 grep 到的、单一的出处：以后调整浮层语言
+   只改第 1 节的 token，这七个浮层和三个新模块一起跟着动。
+   专指度与 index.html 的原规则逐一相同（.menu 是 (0,1,0)，其余是 (1,0,0)），
+   靠加载顺序取胜，不引入任何新的层叠优势。 */
+.menu,
+#toast,
+#save-prompt,
+#account-picker,
+#profile-open-modal,
+#quick-note-popover {
+  border-radius: var(--ov-radius);
+}
+.menu {
+  z-index: var(--z-menu);       /* 同值 60，改为引用阶梯 */
+}
+#toast {
+  z-index: var(--z-toast);      /* 同值 200，改为引用阶梯 */
+}
+/* 浮层内的行 / 条目：菜单项已经是 --r-sm，这里把它写成 --ov-radius-item，
+   新模块的列表行照抄同一个 token 就自动一致。 */
+.menu .menu-item {
+  border-radius: var(--ov-radius-item);
+}
+
+
+/* ===== 6. 「开启态」的两套词汇（规则，不是新样式） ========================
+   §1.6-4：应用里有意存在两种「亮着」的语义，本轮把它们写成规则并各给一组
+   token，新模块必须二选一，不许发明第三种：
+
+     甲 · 功能开着 = 强调色填充 + --on-primary 文字
+          （--ov-accent / --ov-accent-ink）
+          现有用例：#focus-bar .fm-btn.on、#strip-focus.on、
+                    #tab-strip .win-act.ok、button.aim-btn.on（本轮并入，
+                    见第 2 节：--accent 一改，它自动就是强调色填充）。
+          新用例：状态条的活动账号、命令面板的当前项、引导的主按钮。
+
+     乙 · 有非默认设置 = 琥珀警示（--ov-warn-bg / --ov-warn-border /
+          --ov-warn-ink）
+          现有用例：.tool-ind.on、.speed-ind.hot、.tab.muted。
+          新用例：状态条上加载失败 / 已崩溃 / 无响应的账号点。
+
+   第 2 节把 button.aim-btn.on 从第三种写法（硬编码 #c8783c）并进了甲，
+   所以这一节不需要再写任何规则。留着这段文字，是因为它就是本功能要交付的
+   东西之一。 */

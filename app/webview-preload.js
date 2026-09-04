@@ -121,7 +121,69 @@ function fillForm(cred) {
   } catch (e) {}
 }
 
+// Focus mode promotes a thumbnail to the main slot without the user clicking into
+// the game, so the plugin surface has to be handed the keyboard focus explicitly.
+ipcRenderer.on('xz:focus-game', () => {
+  try {
+    const els = Array.from(document.querySelectorAll('embed, object, iframe'));
+    let best = null, area = 0;
+    for (const el of els) {
+      const r = el.getBoundingClientRect();
+      if (r.width * r.height > area) { area = r.width * r.height; best = el; }
+    }
+    if (best && typeof best.focus === 'function') best.focus();
+  } catch (e) {}
+});
+
 ipcRenderer.on('pw:fill', (_e, cred) => fillForm(cred));
+
+// Auto sign-in: the host only sends this once it has confirmed the profile opted in.
+// One submit per document, no matter how many times the host asks.
+let autoSubmitted = false;
+ipcRenderer.on('pw:submit-now', (_e, opts) => {
+  if (autoSubmitted) return;
+  try {
+    const f = findAnyLoginForm();
+    const want = (opts && opts.username) || '';
+    if (!f || !f.pwField || !f.pwField.value || (f.userField && want && f.userField.value !== want)) {
+      ipcRenderer.sendToHost('pw:auto-submitted', { ok: false, reason: 'fields' });
+      return;
+    }
+    autoSubmitted = true;
+    let method = '';
+    const form = f.form;
+    let btn = form ? form.querySelector('button[type="submit"], input[type="submit"]') : null;
+    if (!btn && form) btn = Array.from(form.querySelectorAll('button, a, [role="button"], input[type="button"]')).find(el => LOGIN_TEXT.test((el.innerText || el.textContent || el.value || '').trim()));
+    if (btn) { btn.click(); method = 'click'; }
+    else if (form) { if (form.requestSubmit) form.requestSubmit(); else form.submit(); method = 'submit'; }
+    else { for (const type of ['keydown', 'keypress', 'keyup']) f.pwField.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true })); method = 'enter'; }
+    ipcRenderer.sendToHost('pw:auto-submitted', { ok: true, method });
+  } catch (e) { ipcRenderer.sendToHost('pw:auto-submitted', { ok: false, reason: 'error' }); }
+});
+
+// Page cleanup: the host owns the rule table, this end just pastes the CSS it is
+// handed and optionally centres the stage. mode 'off' undoes everything it did.
+let cleanupStage = null;
+ipcRenderer.on('xz:cleanup', (_e, spec) => {
+  try {
+    const s = spec || {};
+    let st = document.getElementById('xz-cleanup');
+    if (!st) { st = document.createElement('style'); st.id = 'xz-cleanup'; (document.head || document.documentElement).appendChild(st); }
+    st.textContent = s.mode && s.mode !== 'off' ? (s.css || '') : '';
+    if (cleanupStage) { cleanupStage.style.cssText = cleanupStage.dataset.xzPrev || ''; delete cleanupStage.dataset.xzPrev; cleanupStage = null; }
+    if (s.mode !== 'center') return;
+    let el = s.stage ? document.querySelector(s.stage) : null;
+    if (!el) { let area = 0; for (const c of document.querySelectorAll('embed, object')) { const r = c.getBoundingClientRect(); if (r.width * r.height > area) { area = r.width * r.height; el = c; } } }
+    if (!el) return;
+    const w = Math.round(el.offsetWidth), h = Math.round(el.offsetHeight);
+    if (!w || !h) return;
+    el.dataset.xzPrev = el.style.cssText;
+    // No transform: it would make the plugin layer resample at a non-integer ratio.
+    el.style.cssText += ';position:fixed!important;left:0!important;right:0!important;top:0!important;bottom:0!important;margin:auto!important;width:' + w + 'px!important;height:' + h + 'px!important;z-index:2147483000!important';
+    cleanupStage = el;
+  } catch (e) {}
+});
+function requestCleanup() { try { ipcRenderer.sendToHost('xz:cleanup-query', { host: location.hostname, path: location.pathname }); } catch (e) {} }
 
 // Manual capture — host asks "grab whatever's currently in the login fields"
 ipcRenderer.on('pw:capture-now', () => {
@@ -145,6 +207,8 @@ ipcRenderer.on('pw:capture-now', () => {
 // Auto-request autofill at several points — pages often load forms late.
 window.addEventListener('DOMContentLoaded', requestAutofill);
 window.addEventListener('load', requestAutofill);
+window.addEventListener('DOMContentLoaded', requestCleanup);
+window.addEventListener('load', requestCleanup);
 window.addEventListener('DOMContentLoaded', detectLegacyPluginPage);
 window.addEventListener('load', detectLegacyPluginPage);
 setTimeout(requestAutofill, 800);

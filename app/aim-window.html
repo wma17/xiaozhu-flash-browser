@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>竞技辅助</title>
+<style>
+  /* The panel brings its own styling; this page only has to give it a surface and
+     the handful of theme variables it falls back on inside the browser window. */
+  :root {
+    --hud-bg: #1c1612;
+    --hud-fill: rgba(255,255,255,.08);
+    --hud-fill-2: rgba(255,255,255,.16);
+    --field-bg: rgba(0,0,0,.3);
+    --border: rgba(255,255,255,.14);
+    --text: #f4ece1;
+    --accent: #c8783c;
+  }
+  html, body {
+    margin: 0; height: 100%;
+    background: #1c1612; color: var(--text);
+    font: 12px -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    overflow: hidden;
+    cursor: default;
+    user-select: none;
+  }
+  /* Docked to the window: the OS frame does the dragging, so the panel drops its
+     own offsets and fills whatever size the user gives this window. */
+  #aim-panel {
+    position: absolute !important;
+    inset: 0 !important;
+    width: auto !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    display: block !important;
+  }
+  #aim-panel .aim-head { cursor: default; -webkit-app-region: drag; }
+  #aim-panel .aim-head button { -webkit-app-region: no-drag; }
+  #aim-panel .aim-body { max-height: none !important; height: calc(100% - 37px); }
+  #aim-toast {
+    position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+    background: rgba(0,0,0,.86); color: #fff; padding: 7px 12px; border-radius: 8px;
+    font-size: 12px; max-width: 90%; opacity: 0; transition: opacity .18s; pointer-events: none;
+  }
+  #aim-toast.on { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="aim-toast"></div>
+<script>window.__AIM_POPOUT__ = true;</script>
+<script src="aim-assist.js"></script>
+<script>
+  // The module calls showToast() when it has something to say; inside the browser
+  // window that is the app's own toast, out here it is this one line of DOM.
+  window.showToast = function (msg) {
+    const el = document.getElementById('aim-toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add('on');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove('on'), 3200);
+  };
+  if (window.AimAssist) window.AimAssist.toggle(true);
+</script>
+</body>
+</html>
