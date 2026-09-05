@@ -91,6 +91,7 @@ typedef struct DiagEntry {
 } DiagEntry;
 
 static pthread_mutex_t g_diag_lock = PTHREAD_MUTEX_INITIALIZER;
+static bool g_diag_enabled = false;
 static char g_diag_file[1024];
 static uint64_t g_diag_updates = 0;
 static uint64_t g_diag_last_flush_updates = 0;
@@ -212,13 +213,14 @@ static void setup_diag_file(void) {
   if (g_diag_file[0]) return;
   const char *configured = getenv("XZFLASH_SPEED_DIAG_FILE");
   if (configured && *configured) {
-    snprintf(g_diag_file, sizeof(g_diag_file), "%s", configured);
+    snprintf(g_diag_file, sizeof(g_diag_file), "%s.%d", configured, (int)getpid());
   } else {
-    snprintf(g_diag_file, sizeof(g_diag_file), "/tmp/xzflash-speed-diag-%d.json", getuid());
+    snprintf(g_diag_file, sizeof(g_diag_file), "/tmp/xzflash-speed-diag-%d-%d.json", (int)getuid(), (int)getpid());
   }
 }
 
 static void diag_record(DiagSymbol symbol, bool changed, uint64_t requested_us, uint64_t scaled_us) {
+  if (!g_diag_enabled) return;
   if (!g_active || symbol >= DIAG_COUNT) return;
 
   bool should_flush = false;
@@ -242,6 +244,7 @@ static void diag_record(DiagSymbol symbol, bool changed, uint64_t requested_us, 
 }
 
 static void flush_diag(bool force) {
+  if (!g_diag_enabled) return;
   if (!g_active) return;
   setup_diag_file();
 
@@ -428,7 +431,7 @@ static void maybe_refresh_speed_locked(void) {
   int profile = g_speed_profile;
   int ok = fscanf(f, "%lf %d", &next, &profile);
   fclose(f);
-  if (ok != 1) return;
+  if (ok < 1) return;
   if (ok >= 2 && profile >= 0 && profile <= SPEED_PROFILE_MAX) g_speed_profile = profile;
   apply_speed_locked(next);
 }
@@ -488,7 +491,9 @@ static void xzspeed_init(void) {
   } else {
     snprintf(g_speed_file, sizeof(g_speed_file), "/tmp/xzflash-speed-%d", getuid());
   }
-  setup_diag_file();
+  const char *diag_flag = getenv("XZFLASH_SPEED_DIAG");
+  g_diag_enabled = (diag_flag && strcmp(diag_flag, "1") == 0);
+  if (g_diag_enabled) setup_diag_file();
 
   g_mach_real_anchor = mach_absolute_time();
   g_mach_virt_anchor = g_mach_real_anchor;
@@ -509,7 +514,7 @@ static void xzspeed_init(void) {
   maybe_refresh_speed_locked();
   pthread_mutex_unlock(&g_lock);
   flush_diag(true);
-  fprintf(stderr, "[xzspeed] active in pid %d, speed file %s, diag %s\n", getpid(), g_speed_file, g_diag_file);
+  fprintf(stderr, "[xzspeed] active in pid %d, speed file %s, diag %s\n", getpid(), g_speed_file, g_diag_enabled ? g_diag_file : "(off)");
 }
 
 static uint64_t my_mach_absolute_time(void) {

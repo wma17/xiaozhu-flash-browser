@@ -740,6 +740,12 @@
       z-index: 0;
     }
     body.in-browser::before, body.game-mode::before { display: none; }
+    /* 非浏览路由现在把游戏盖住而不是藏起来（见 #main 那一节），所以这层装饰底
+       从此永远看不见：不是被 .in-browser 的门关掉，就是被不透明的路由页整块盖住。
+       留着它只会让 lively 主题白白跑一条全窗口的 background-position 动画，
+       在游戏正在跑的时候持续重绘。路由页自己画同一张底。逃生门
+       (settings.pauseGamesOffRoute) 打开时恢复原样。 */
+    body:not(.pause-games-off-route)::before { display: none; }
     #app { position: relative; z-index: 1; display: flex; flex-direction: column; height: 100%; }
 
     /* ========== Top bar ========== */
@@ -944,6 +950,35 @@
     .route { position: absolute; inset: 0; display: none; overflow: auto; padding: var(--s-7) var(--s-8) var(--s-10); }
     .route.active { display: block; }
 
+    /* ---- 路由页盖在游戏上，而不是把游戏藏起来 --------------------------
+       #webviews-container 是 #route-browser 的孩子（本文件 3563），所以离开
+       浏览路由时 .route 的 display:none 会连 <webview> 一起 display:none ——
+       子帧的 RenderWidget 被 Hide，rAF 停摆，Flash 立刻降频。那正是
+       focus-mode.css 74–76 拿 display:flex 挡住的同一件事。
+       改法：不活动的 #route-browser 留在布局里（display:block），只用
+       z-index:0 沉到底并自成一个层叠上下文（把 #focus-layer 5 / #compat-banner
+       20 / #measure-overlay 25 一起关在里面）；当前路由页 z-index:1 不透明地
+       盖上去。游戏被遮住但没有被隐藏 —— Chromium 不按遮挡降频，全速继续跑。
+       盖上去的那一页必须不透明，底色照抄 body + body::before（712–741）：
+       同一组渐变，只是锚在 #main 的盒子上而不是视口上。#main 以外全是不透明
+       chrome（#sidebar / #topbar / #tab-strip 都是 --panel-white），看不出差别。
+       逃生门：settings.pauseGamesOffRoute === true 时 renderer.js 给 body 加
+       .pause-games-off-route，下面两条全部失效，回到「离开浏览路由=游戏暂停」。 */
+    body:not(.pause-games-off-route) #route-browser:not(.active) {
+      display: block;
+      z-index: 0;
+    }
+    body:not(.pause-games-off-route) .route.active:not(#route-browser) {
+      z-index: 1;
+      background-color: var(--cream-bg);
+      background-image:
+        radial-gradient(1200px 620px at 0% 100%, var(--ambient-a), transparent 64%),
+        radial-gradient(1100px 640px at 100% 0%, var(--ambient-b), transparent 62%),
+        radial-gradient(820px 820px at 74% 86%, var(--ambient-c), transparent 62%);
+      background-size: 170% 170%, 170% 170%, 190% 190%;
+      background-position: 0% 100%, 100% 0%, 74% 86%;
+    }
+
     /* Reusable */
     .section-head {
       display: flex; align-items: baseline; justify-content: space-between;
@@ -998,6 +1033,14 @@
       background: linear-gradient(135deg, var(--soft-wheat), var(--main-orange) 140%);
       position: relative; overflow: hidden;
       display: flex; align-items: center; justify-content: center;
+    }
+    /* Chromium 87 (Electron 11) predates aspect-ratio, so this cover collapsed to
+       a hairline. A zero-width flex item whose percentage padding resolves
+       against the container's own width props it open at 16/10 without taking
+       any horizontal room, so the centred .letter stays centred. Scoped with
+       @supports so engines that do have aspect-ratio are untouched. */
+    @supports not (aspect-ratio: 16 / 10) {
+      .card .cover::before { content: ''; width: 0; padding-top: 62.5%; }
     }
     /* Ink over the theme-tinted cover: --dark-brown is the palette's strongest
        text colour, so it flips to near-white in the dark themes and stays
@@ -1108,6 +1151,14 @@
       background-repeat: no-repeat;
       background-position: center;
       opacity: 0.86;
+    }
+    /* Chromium 87 fallback. Percentage padding resolves against the PARENT's
+       width, and this box is min(240px, 80%) wide, so the padding trick cannot
+       state the ratio here. 240x160 is exactly 3/2 at the capped width; on a
+       parent narrower than 300px the art simply letterboxes inside the reserved
+       box, which background-size: contain already handles. */
+    @supports not (aspect-ratio: 3 / 2) {
+      .placeholder .ph-asset { height: 160px; }
     }
     .placeholder .ph-text {
       max-width: 420px;
@@ -1653,6 +1704,12 @@
          watermark in both the light and the dark palettes. */
       color: var(--border-strong);
     }
+    /* Same Chromium 87 fallback as .card .cover. The initial is a bare text node
+       here, so it cannot be positioned out of flow -- the zero-width ::before
+       flex item is what reserves the 16/10 height. */
+    @supports not (aspect-ratio: 16 / 10) {
+      .lib-card .lc-cover::before { content: ''; width: 0; padding-top: 62.5%; }
+    }
     .lib-card .lc-fav {
       position: absolute; top: var(--s-5); right: var(--s-5);
       width: 26px; height: 26px; border-radius: 50%;
@@ -1799,6 +1856,13 @@
       background-position: center;
       border: 1px solid var(--border);
       overflow: hidden;
+    }
+    /* Chromium 87 fallback: an empty box, so the classic percentage-padding ratio
+       box works as-is. The preview is full-width, so 62.5% of the parent's width
+       is 62.5% of its own -- 16/10. .custom-preview-mark is absolutely
+       positioned against the padding box and still lands inside the artwork. */
+    @supports not (aspect-ratio: 16 / 10) {
+      .theme-card .theme-preview { height: 0; padding-top: 62.5%; }
     }
     .theme-card .swatches {
       display: flex;
@@ -2617,6 +2681,12 @@
       background-repeat: no-repeat;
       background-position: center;
       opacity: 0.88;
+    }
+    /* Chromium 87 fallback. max-height cannot clamp padding, so the 118px cap is
+       folded into the padding itself: min() gives the same height this box gets
+       in Chromium 88+, where aspect-ratio and max-height combine. */
+    @supports not (aspect-ratio: 3 / 2) {
+      .doctor-art { height: 0; padding-top: min(66.667%, 118px); }
     }
     .doctor-art.repair { background-image: var(--doctor-repair-image); }
     .doctor-art.ok { background-image: var(--doctor-ok-image); }
@@ -3455,7 +3525,7 @@
         <div class="about-card">
           <div class="a-badge"></div>
           <h2 data-i18n="brand.name">竹小春三零</h2>
-          <div class="ver"><span data-i18n="about.version"></span> 1.6.1 — DDT Speed</div>
+          <div class="ver"><span data-i18n="about.version"></span> 1.6.2 — DDT Speed</div>
           <p><span data-i18n="about.tagline"></span><br><span data-i18n="about.built_for"></span></p>
           <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); width: 100%; text-align: center;">
             <div style="font-size: 12px; color: var(--dark-brown); font-weight: 700;" data-i18n="about.creator"></div>

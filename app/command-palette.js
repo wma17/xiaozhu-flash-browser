@@ -532,13 +532,13 @@
       function () { return fire(function () { return runWindowAction('restore', null); }); },
       { enabled: function () { return !!ipcRenderer; } });
 
-    add('act_park', 'palette.act_park', '挂起其它账号',
-      ['park', '挂起', '其它账号', 'minimize'],
+    add('act_park', 'palette.act_park', '最小化其它窗口',
+      ['park', '挂起', '最小化', '其它账号', 'minimize'],
       function () { return fire(function () { return runWindowAction('park', null); }); },
       { enabled: function () { return !!ipcRenderer; } });
 
-    add('act_unpark', 'palette.act_unpark', '全部还原',
-      ['unpark', '还原', '全部还原', 'restore windows'],
+    add('act_unpark', 'palette.act_unpark', '还原所有窗口',
+      ['unpark', '还原', '全部还原', '所有窗口', 'restore windows'],
       function () { return fire(function () { return runWindowAction('unpark', null); }); },
       { enabled: function () { return !!ipcRenderer; } });
 
@@ -911,8 +911,8 @@
 //   palette.act_focus_layout 焦点模式：条带 / 分区布局         Focus mode: strip / sector layout
 //   palette.act_tile        平铺窗口                        Tile windows
 //   palette.act_restore_tile 恢复上次布局                    Restore last layout
-//   palette.act_park        挂起其它账号                     Park other accounts
-//   palette.act_unpark      全部还原                        Unpark all
+//   palette.act_park        最小化其它窗口                    Minimize other windows
+//   palette.act_unpark      还原所有窗口                      Restore all windows
 //   palette.act_scatter     散开到多窗口并平铺                Scatter tabs to windows & tile
 //   palette.act_multi_open  多开：用多个档案打开本页           Open this page in several profiles
 //   palette.act_screenshot  截图                           Screenshot the game

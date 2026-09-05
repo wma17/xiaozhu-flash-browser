@@ -12,8 +12,8 @@
 //   main.js 的串行开窗器等的是 window:ready，而它由「首个 webview 的 did-stop-loading」
 //   触发。restoreWindow 是在 boot IIFE 里被调用的，第一个 createTab 如果拖到定时器里，
 //   这个窗口 20 秒内不会 ready，后面几个窗口就得排队等超时。
-//   其余标签页每 700ms（SCATTER_INTERVAL_MS，和散开/多开同一个节奏）建一个，
-//   让 Flash 的加载峰值错开。
+//   其余标签页串行恢复：建一个，等它 did-stop-loading（或 15 秒超时）再建下一个，
+//   让 Flash 的加载峰值彻底错开。拿不到 webview 时退回 SCATTER_INTERVAL_MS 固定间隔。
 //
 // 【防呆】
 //   快照是主进程给的，但主进程读的是磁盘文件 —— 一样当敌意输入处理。任何一步出错都
@@ -140,8 +140,16 @@
 
   // 档案可能已经被删掉了：createTab 的 resolveTabProfile 只做精确匹配，找不到就退回
   // 本窗口的档案 —— 页面照样开出来，只是跟着窗口的账号走。这正是我们要的降级。
-  function makeTab(entry) {
-    try { return createTab(entry.url, entry.profileId ? { profileId: entry.profileId } : null) || null; }
+  function makeTab(entry, background) {
+    try {
+      var opts = null;
+      if (entry.profileId || background) {
+        opts = {};
+        if (entry.profileId) opts.profileId = entry.profileId;
+        if (background) opts.background = true;
+      }
+      return createTab(entry.url, opts) || null;
+    }
     catch (e) { return null; }
   }
   function tabForProfile(list, profileId) {
@@ -175,28 +183,62 @@
     } catch (e) {}
   }
 
+  // 一个标签页「安顿下来」= 它的 webview 触发一次 did-stop-loading，或者 15 秒到点。
+  // 先到者胜：谁先来就把另一个清掉，next 只会被调用一次。webview 拿不到（或者
+  // addEventListener 抛了）就退回原来的 scatterMs() 固定间隔，行为不比以前差。
+  // 8 秒，不是 15：恢复发生在开机、窗口还是空的时候，用户在等。而且这里建出来的
+  // 标签页在非焦点模式下是 display:none 的（index.html 1391），guest 照样加载
+  // （webpreferences 里有 backgroundThrottling=no），但万一某台机器上 did-stop-loading
+  // 不来，超时就是唯一的出口 —— 6 个标签页最多卡 40 秒而不是 90 秒。
+  // 就算真有页面要 10 秒才加载完，8 秒的错峰也比原来的 700ms 梯子好一个数量级。
+  var LOAD_WAIT_MS = 8000;
+  function afterTabSettled(tab, next) {
+    var done = false, timer = null, wv = null, onStop = null;
+    var finish = function () {
+      if (done) return;
+      done = true;
+      try { if (timer !== null) window.clearTimeout(timer); } catch (e) {}
+      timer = null;
+      try { if (wv && onStop) wv.removeEventListener('did-stop-loading', onStop); } catch (e) {}
+      onStop = null;
+      try { next(); } catch (e) {}
+    };
+    var later = function () {
+      try { window.setTimeout(finish, scatterMs()); } catch (e) { finish(); }
+    };
+    try { wv = (tab && tab.webview) ? tab.webview : null; } catch (e) { wv = null; }
+    if (!wv || typeof wv.addEventListener !== 'function') { later(); return; }
+    onStop = function () { finish(); };
+    try { wv.addEventListener('did-stop-loading', onStop, { once: true }); }
+    catch (e) { onStop = null; later(); return; }
+    try { timer = window.setTimeout(finish, LOAD_WAIT_MS); } catch (e) { timer = null; }
+  }
+
   // 返回 true = 本模块已经接管建标签页，renderer 的 boot 分支不要再走 initialUrl。
   function restoreWindow(w) {
     try {
       var plan = sanitize(w);
       if (!plan) return false;
       var created = [];
-      var first = makeTab(plan.tabs[0]);   // 同步：window:ready 靠它
+      var first = makeTab(plan.tabs[0], false);   // 同步：window:ready 靠它；第一个照常激活
       if (!first) return false;
       created.push(first);
       if (plan.tabs.length === 1) { finishRestore(plan, created); return true; }
       var i = 1;
-      var gap = scatterMs();
       var step = function () {
         try {
           if (i >= plan.tabs.length) { finishRestore(plan, created); return; }
-          var t = makeTab(plan.tabs[i]);
-          if (t) created.push(t);
+          var t = makeTab(plan.tabs[i], true);   // 后续标签页一律后台建，别把视线抢走
           i++;
-          window.setTimeout(step, gap);   // 错峰加载：一次开五个 Flash 会把机器压死
+          if (t) {
+            created.push(t);
+            afterTabSettled(t, step);   // 串行：等这一个加载完再开下一个
+          } else {
+            window.setTimeout(step, scatterMs());
+          }
         } catch (e) {}
       };
-      window.setTimeout(step, gap);
+      afterTabSettled(first, step);
       return true;
     } catch (e) { return false; }
   }

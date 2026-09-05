@@ -154,20 +154,29 @@
     tab.__xzWatched = true;
     var wv = tab.webview;
     function on(ev, fn) { try { wv.addEventListener(ev, fn); } catch (e) {} }
-    on('did-start-loading', function () { setState(tab, 'loading'); });
-    on('did-stop-loading', function () { setState(tab, 'ok'); });
+    // did-fail-load 后 Chromium 还会再发一次 did-stop-loading，直接 setState('ok')
+    // 会把刚刚的 failed 盖掉（错误页也算“加完了”）。用一个每次开始
+    // 加载时清零的标记拦住那次覆盖。
+    on('did-start-loading', function () {
+      tab.__xzLoadFailed = false;
+      setState(tab, 'loading');
+    });
+    on('did-stop-loading', function () {
+      if (!tab.__xzLoadFailed) setState(tab, 'ok');
+    });
     on('did-fail-load', function (e) {
       // 子框架（广告 iframe）失败不算这个页面坏了；errorCode -3 = ERR_ABORTED，
       // 是用户自己停掉 / 被重定向打断，也不算故障。
       if (e && e.isMainFrame === false) return;
       if (e && e.errorCode === -3) return;
+      tab.__xzLoadFailed = true;
       setState(tab, 'failed');
     });
     on('crashed', function () { setState(tab, 'crashed'); });
     on('render-process-gone', function () { setState(tab, 'crashed'); });
     on('plugin-crashed', function () { setState(tab, 'plugin'); });   // Flash 挂了
     on('unresponsive', function () { setState(tab, 'hung'); });
-    on('responsive', function () { setState(tab, 'ok'); });
+    on('responsive', function () { setState(tab, 'ok'); });   // 从“无响应”恢复，与加载结果无关
     on('destroyed', function () { setState(tab, null); });
   }
 
@@ -243,7 +252,7 @@
   function paintLoad() {
     if (!elLoad) return;
     var d = lastLoad;
-    var s = t_('status.load', 'CPU {total}% · Flash {plugin}% · GPU {gpu}%');
+    var s = t_('status.load', 'CPU {total}% · Flash {plugin}% · GPU进程 {gpu}%');
     s = s.replace('{total}', pct(d ? d.total : null))
          .replace('{plugin}', pct(d ? d.plugin : null))
          .replace('{gpu}', pct(d ? d.gpu : null));
@@ -535,10 +544,11 @@
 // 本文件用到的 i18n 键（en / zh-CN 由集成包 WP6 加进 i18n.js，缺了就显示中文兜底）
 //   status.fps            界面 {n} 帧                      #sb-fps
 //   status.fps_tip        （说明这是界面帧率，不是 Flash 游戏帧率）  #sb-fps 的 title
-//   status.load           CPU {total}% · Flash {plugin}% · GPU {gpu}%   #sb-load
+//   status.load           CPU {total}% · Flash {plugin}% · GPU进程 {gpu}%   #sb-load
+//                         （en: GPU proc {gpu}%；GPU 一项是 GPU 进程的 CPU 时间）
 //   status.load_tip       （说明 GPU 一项是 GPU 进程的 CPU 时间）      #sb-load 的 title
 //   status.state_loading  加载中                           账号点 title
-//   status.state_ok       正常                             账号点 title
+//   status.state_ok       页面已加载                         账号点 title
 //   status.state_failed   加载失败                         账号点 title
 //   status.state_crashed  页面已崩溃                        账号点 title
 //   status.state_plugin   Flash 已崩溃                      账号点 title

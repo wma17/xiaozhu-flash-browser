@@ -218,7 +218,7 @@ static void refresh_speed(void) {
   int profile = g_speed_profile;
   int ok = fscanf(f, "%lf %d", &next, &profile);
   fclose(f);
-  if (ok != 1) return;
+  if (ok < 1) return;
   if (ok >= 2 && profile >= 0 && profile <= SPEED_PROFILE_MAX) g_speed_profile = profile;
   apply_speed(next);
 }

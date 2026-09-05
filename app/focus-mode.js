@@ -1348,20 +1348,51 @@
     if (!menu.parentNode) document.body.appendChild(menu);
     try { if (typeof armMenuClose === 'function') armMenuClose(); } catch (e) {}
   }
+  // 加号批量开账号：后台创建 + 串行。
+  // 旧做法是 i*700 的固定梯子、每个都抢焦点，最后再切回来 —— 一回合只有 5–10 秒，
+  // 中途被切走就等于这一局白打。现在每个 tab 都用 background:true 建（createTab 里
+  // 已经跑过 XZFocus.onTabCreated → layout()，所以槽位照样有），并且等它自己的
+  // did-stop-loading 再开下一个，一次只让一个 webview 在加载。
+  var OPEN_STEP_TIMEOUT_MS = 15000;
   function openProfiles(ids) {
     if (typeof createTab !== 'function' || !ids || !ids.length) return;
     var cur = null;
     try { cur = (typeof activeTab === 'function') ? activeTab() : null; } catch (e) {}
     var keepId = cur ? cur.id : null;
     var url = cur ? cur.url : (typeof homeUrl === 'string' ? homeUrl : null);
-    ids.forEach(function (pid, i) {
-      setTimeout(function () {
-        try { createTab(url, { profileId: pid }); } catch (e) {}
-        if (i === ids.length - 1 && keepId != null) {
-          setTimeout(function () { if (findTab(keepId)) activateAndSync(keepId); }, 80);
-        }
-      }, Math.min(8000, i * 700));
-    });
+    var list = ids.slice();
+
+    // did-stop-loading 和 15 秒超时二选一，先到者胜；webview 拿不到就立刻放行。
+    function afterLoaded(tab, next) {
+      var done = false, timer = null, wv = null;
+      function finish() {
+        if (done) return;
+        done = true;
+        if (timer) { clearTimeout(timer); timer = null; }
+        try { if (wv) wv.removeEventListener('did-stop-loading', finish); } catch (e) {}
+        try { next(); } catch (e) {}
+      }
+      try { wv = tab ? tab.webview : null; } catch (e) { wv = null; }
+      if (!wv) { finish(); return; }
+      try { wv.addEventListener('did-stop-loading', finish, { once: true }); }
+      catch (e) { finish(); return; }
+      timer = setTimeout(finish, OPEN_STEP_TIMEOUT_MS);
+    }
+
+    function step(i) {
+      if (i >= list.length) {
+        // 保险：全程不该切走，但万一有别的路径动了主视图就切回来。
+        try {
+          var now = (typeof activeTab === 'function') ? activeTab() : null;
+          if (keepId != null && (!now || now.id !== keepId) && findTab(keepId)) activateAndSync(keepId);
+        } catch (e) {}
+        return;
+      }
+      var tab = null;
+      try { tab = createTab(url, { profileId: list[i], background: true }); } catch (e) { tab = null; }
+      afterLoaded(tab, function () { step(i + 1); });
+    }
+    step(0);
   }
 
   // ------------------------------------------------------------ 音频（§2.7）

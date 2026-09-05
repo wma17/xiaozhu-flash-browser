@@ -1080,6 +1080,16 @@ ipcMain.handle('window:open-accounts-grid', (_e, accounts) => {
   }))).catch(e => dlog('open-accounts-grid failed: ' + (e && e.stack || e)));
   return { queued: total };
 });
+// Same queue as the grid open, minus the tiling: the renderer used to fire one
+// window:open per account on a fixed 700ms ladder, which raced the plugin start-up.
+ipcMain.handle('window:open-accounts', (_e, accounts) => {
+  const list = Array.isArray(accounts) ? accounts.filter(a => a && a.profileId) : [];
+  openWindowsSequentially(list.map(account => ({
+    url: account.url || homeUrl,
+    profileId: account.profileId,
+  }))).catch(e => dlog('open-accounts failed: ' + (e && e.stack || e)));
+  return { queued: list.length };
+});
 // Tile every open window, then remember where each one landed so the same
 // arrangement can be put back later (including after the user nudges it).
 function tileWindows() {
@@ -1471,7 +1481,7 @@ function accountMenuItems() {
   // action depended on the renderer correctly identifying the focused window,
   // which is exactly the part that kept failing.
   items.push({
-    label: 'Park Other Accounts',
+    label: 'Minimize Other Windows',
     accelerator: 'CommandOrControl+Shift+H',
     click: () => {
       const win = BrowserWindow.getFocusedWindow();
@@ -1480,7 +1490,7 @@ function accountMenuItems() {
     },
   });
   items.push({
-    label: 'Unpark All Accounts',
+    label: 'Restore All Windows',
     accelerator: 'CommandOrControl+Shift+U',
     click: () => unparkAll(),
   });

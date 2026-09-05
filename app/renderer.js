@@ -270,6 +270,11 @@ async function loadStores() {
   skippedSites = sk || []; notes = nt || []; tasks = tk || [];
   settings = Object.assign(settings, st || {});
   settings.identity = settings.identity || {};
+  // 逃生门要在第一次 setRoute 之前就生效，否则会话恢复出来的 webview 在开机
+  // 那一瞬间会按新行为（不暂停）跑。见 setRoute 里的同一个 toggle。
+  try {
+    document.body.classList.toggle('pause-games-off-route', settings.pauseGamesOffRoute === true);
+  } catch (e) {}
   let settingsChanged = false;
   if (!SPEED_PROFILE_KEYS.includes(settings.speedProfile)) {
     settings.speedProfile = 'native-ddt';
@@ -903,8 +908,28 @@ function reRenderCurrent() {
 }
 
 // ---------- routing ----------
+// 离开浏览路由时把键盘焦点从 guest 里拿回来。游戏不再被隐藏（见下面 setRoute
+// 的注释），所以如果不 blur，方向键/空格会继续被 Flash 吃掉，用户在设置页里
+// 打字会打进游戏。命令面板做的是同一件事（command-palette.js 800）。
+function blurGuestKeyboard() {
+  try {
+    const ae = document.activeElement;
+    if (ae && ae.tagName === 'WEBVIEW' && typeof ae.blur === 'function') ae.blur();
+  } catch (e) {}
+}
+// 回到浏览路由时把焦点还给当前账号的游戏 —— 与 focus-mode.js focusGame()
+// / command-palette.js focusTab() 同一条路径：webview.focus() 之后再让
+// preload 把页面里最大的 embed/object 也 focus 一下（webview-preload.js 126）。
+function focusActiveGame() {
+  const t = activeTab();
+  if (!t || !t.webview) return;
+  try { t.webview.focus(); } catch (e) {}
+  if (!t.ready) return;                       // dom-ready 之前 send() 会抛
+  try { if (typeof t.webview.send === 'function') t.webview.send('xz:focus-game'); } catch (e) {}
+}
 function setRoute(name) {
   closeAnyMenus();
+  const prevRoute = currentRoute;
   // The "recently used" view is a transient lens, not a saved preference.
   if (name !== 'profiles' && currentRoute === 'profiles') {
     profileOrderView = 'manual';
@@ -914,7 +939,16 @@ function setRoute(name) {
   currentRoute = name;
   document.querySelectorAll('.route').forEach(el => el.classList.toggle('active', el.id === 'route-' + name));
   document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.route === name));
-  $webviews.style.visibility = (name === 'browser') ? 'visible' : 'hidden';
+  // 路由页盖在游戏上，而不是把游戏藏起来：#webviews-container 在 #route-browser
+  // 里，旧的 visibility 切换 + .route 的 display:none 会一起把 <webview> 的
+  // RenderWidget 隐掉，Flash 立刻降频（focus-mode.css 74–76 是同一件事）。CSS
+  // 那边让 #route-browser:not(.active) 留在布局里、沉到 z-index:0，当前路由页
+  // 不透明地盖在上面（index.html .route.active 那一节）。
+  // 逃生门：settings.pauseGamesOffRoute === true → 回到旧行为（离开浏览路由 =
+  // 所有游戏暂停）。没有设置界面，只认 config 里手写的这个键。
+  const pauseOffRoute = !!(settings && settings.pauseGamesOffRoute === true);
+  document.body.classList.toggle('pause-games-off-route', pauseOffRoute);
+  $webviews.style.visibility = (!pauseOffRoute || name === 'browser') ? 'visible' : 'hidden';
   document.body.classList.toggle('in-browser', name === 'browser');
   updateAccountIndicator();
   if (name === 'browser') {
@@ -940,6 +974,12 @@ function setRoute(name) {
   else if (name === 'tasks') renderTasks();
   else if (name === 'library') renderLibrary();
   if (name === 'browser' && measuring.active) setTimeout(resizeMeasureCanvas, 0); // XZ-AIM-LINE
+  // 只在真的换了路由时动焦点：setRoute('browser') 在浏览路由里被反复调用
+  // （activateTab 之后又显式调一次），重复 focus 会和 XZFocus.onActivated 打架。
+  if (prevRoute !== name) {
+    if (name !== 'browser') blurGuestKeyboard();
+    else focusActiveGame();
+  }
   document.dispatchEvent(new CustomEvent('xz:route', { detail: name }));
 }
 
@@ -1127,6 +1167,8 @@ function paintTabLabel(tab) {
   tab.stripEl.style.setProperty('--acct', p && isHexColor(p.color) ? p.color : '');
   if (sepEl) sepEl.style.display = name ? '' : 'none';
   if (titleEl) titleEl.textContent = tab.title || hostOf(tab.url) || '';
+  const detachEl = tab.stripEl.querySelector('.detach');
+  if (detachEl) detachEl.title = tOr('tabs.detach_tip', '移到新窗口（会重新加载）');
   tab.stripEl.title = tabFullLabel(tab);
 }
 function repaintAllTabLabels() { for (const t of tabs) paintTabLabel(t); }
@@ -1226,7 +1268,7 @@ function createTab(url, opts) {
     '<span class="t-prof"></span>' +
     '<span class="t-sep">\uFF5C</span>' +
     '<span class="t-title">Loading…</span>' +
-    '<span class="detach" title="Move to new window">⧉</span>' +
+    '<span class="detach" title="' + escapeHtml(tOr('tabs.detach_tip', '移到新窗口（会重新加载）')) + '">⧉</span>' +
     '<span class="close" title="Close">✕</span>';
   stripEl.addEventListener('mousedown', (e) => {
     if (e.target.classList.contains('close') || e.target.classList.contains('detach')) return;
@@ -1236,7 +1278,13 @@ function createTab(url, opts) {
     activateTab(id);
   });
   stripEl.querySelector('.close').addEventListener('click', (e) => { e.stopPropagation(); closeTab(id); });
-  stripEl.querySelector('.detach').addEventListener('click', (e) => { e.stopPropagation(); detachTab(id); });
+  // The "reloads the page, interrupts the match" warning now lives inside
+  // detachTab() — this button, the Window menu item and the command palette all
+  // reach the same function, and only this one used to ask.
+  stripEl.querySelector('.detach').addEventListener('click', (e) => {
+    e.stopPropagation();
+    detachTab(id);
+  });
   $tabList.appendChild(stripEl);
   tab.stripEl = stripEl;
   paintTabLabel(tab);
@@ -1305,12 +1353,28 @@ function createTab(url, opts) {
   });
   wv.addEventListener('page-title-updated', (e) => {
     tab.title = e.title || hostOf(tab.url);
+    tab.titleStale = false;   // 这个标题确实是当前这一页的了
     paintTabLabel(tab);
+    // recordHistory() wrote the row at did-navigate, before the page had a real title,
+    // so Home/Recent were stuck showing "Loading…" or the bare URL. Fill it in now.
+    const h = history.find(x => x && x.url === tab.url);
+    if (h && tab.title && (!h.title || h.title === 'Loading…' || h.title === h.url)) {
+      h.title = tab.title;
+      saveHistorySoon();
+      if (currentRoute === 'home') renderHomeContinue();
+      else if (currentRoute === 'recent') renderRecent();
+    }
     if (currentRoute === 'windows') renderWindows();
     if (id === activeId) pushWindowMeta();
   });
   wv.addEventListener('did-navigate', (e) => {
     tab.url = e.url;
+    // tab.title is not cleared on navigation (the strip would flicker), so at commit
+    // time it is still the PREVIOUS page's title. recordHistory() must not stamp that
+    // onto the new row, or Recent shows the new URL under the old page's name and the
+    // page-title-updated write-back above never fires (the title is neither "Loading…"
+    // nor the bare URL). Mark it stale here; page-title-updated clears the mark.
+    tab.titleStale = true;
     if (id === activeId) $topUrl.value = e.url;
     paintTabLabel(tab);   // keeps the hover tooltip in step when only the host changed
     recordHistory(tab);
@@ -1378,8 +1442,15 @@ function createTab(url, opts) {
   // Give the new webview its slot geometry before it is shown, or it flashes full-screen for a frame.
   document.dispatchEvent(new CustomEvent('xz:tab-created', { detail: tab }));
   if (window.XZFocus) XZFocus.onTabCreated(tab);
-  activateTab(id);
-  setRoute('browser');
+  // opts.background: build the tab fully (strip row, webview, focus-mode slot via the
+  // XZFocus.onTabCreated() above) but leave the user where they are — a round lasts 5–10
+  // seconds, so stealing the view to a still-loading account is what we are avoiding.
+  // An empty window is the one case that must still activate, or nothing is on screen.
+  const background = !!(opts && opts.background) && activeId != null && tabs.length > 1;
+  if (!background) {
+    activateTab(id);
+    setRoute('browser');
+  }
   // A rule quietly switched accounts on the user; say so, or the chip changing name
   // looks like a bug.
   if (picked.reason === 'rule' && profile) {
@@ -1436,9 +1507,18 @@ function closeTab(id) {
   if (currentRoute === 'windows') renderWindows();
 }
 
-async function detachTab(id) {
+// Detaching cannot move a live webview (Chromium): the page is reopened in the new
+// window, so it reloads and whatever match was running is lost. The warning sits
+// here so every entry point gets it exactly once — the tab strip's detach button,
+// the Window menu's "Move Tab to New Window" and the command palette's act_detach
+// all land on this function. Callers that already asked their own question pass
+// { confirmed: true } (scatterTabsAndTile does, or it would prompt per tab).
+async function detachTab(id, opts) {
   const tab = tabs.find(t => t.id === id);
   if (!tab) return;
+  if (!(opts && opts.confirmed)) {
+    if (!confirm(tOr('tabs.detach_confirm', '移到新窗口会重新加载这个页面，正在进行的对局会中断。继续？'))) return;
+  }
   await ipcRenderer.invoke('window:open', tab.url, tab.profileId);
   closeTab(id);
 }
@@ -2349,7 +2429,7 @@ function runWindowAction(kind, btn) {
     return fillCount('layout.restored_toast', '\u5df2\u6062\u590d {n} \u4e2a\u7a97\u53e3', r.restored || 0);
   });
   else if (kind === 'park') job = ipcRenderer.invoke('windows:park-others').then((n) => (
-    n ? fillCount('layout.parked_toast', '\u5df2\u6302\u8d77 {n} \u4e2a\u7a97\u53e3', n)
+    n ? fillCount('layout.parked_toast', '\u5df2\u6700\u5c0f\u5316 {n} \u4e2a\u7a97\u53e3\uff08\u6e38\u620f\u4ecd\u5728\u8fd0\u884c\uff09', n)
       : tOr('layout.nothing', '\u6ca1\u6709\u53ef\u64cd\u4f5c\u7684\u7a97\u53e3')
   ));
   else if (kind === 'unpark') job = ipcRenderer.invoke('windows:unpark-all').then((n) => (
@@ -2383,7 +2463,7 @@ async function scatterTabsAndTile() {
   showToast(fillCount('scatter.working', '正在散开 {n} 个标签页，每 0.7 秒一个…', moving.length));
   for (let i = 0; i < moving.length; i++) {
     if (i) await new Promise(r => setTimeout(r, SCATTER_INTERVAL_MS));
-    try { await detachTab(moving[i]); } catch (e) {}
+    try { await detachTab(moving[i], { confirmed: true }); } catch (e) {}
   }
   // One more beat so the last window has painted before main measures the screen.
   await new Promise(r => setTimeout(r, SCATTER_INTERVAL_MS));
@@ -2422,8 +2502,8 @@ function paintLocalStrings() {
   };
   const tile = tOr('layout.tile', '\u5e73\u94fa\u7a97\u53e3');
   const restore = tOr('layout.restore', '\u6062\u590d\u5e03\u5c40');
-  const park = tOr('bar.park_others', '\u6302\u8d77\u5176\u5b83\u8d26\u53f7');
-  const unpark = tOr('layout.unpark_all', '\u5168\u90e8\u8fd8\u539f');
+  const park = tOr('bar.park_others', '\u6700\u5c0f\u5316\u5176\u5b83\u7a97\u53e3');
+  const unpark = tOr('layout.unpark_all', '\u8fd8\u539f\u6240\u6709\u7a97\u53e3');
   set('act-tile', tile); set('act-restore-tile', restore);
   set('act-park-others', park); set('act-unpark-all', unpark);
   // Icon buttons keep the words in the tooltip.
@@ -2639,6 +2719,19 @@ function shortcutFromInput(input) {
   parts.push(code);
   return parts.join('+');
 }
+// Keys a Flash game eats the moment the webview has focus: space jumps, arrows move,
+// digits swap items, letters are the usual action binds. Without ⌘/⌥/⌃ the shortcut
+// would fire mid-round every time, so recording refuses it. Shift alone does not count
+// as a modifier here (Shift+digit / Shift+letter are just as common in-game); F1–F12
+// and every punctuation code stay allowed.
+const BARE_GAME_CODES = new Set(['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'NumpadEnter', 'Tab', 'Escape']);
+function isBareGameKey(input) {
+  if (!input) return false;
+  if (input.alt || input.control || input.meta) return false;
+  const code = input.code || '';
+  if (BARE_GAME_CODES.has(code)) return true;
+  return /^Key[A-Z]$/.test(code) || /^Digit\d$/.test(code);
+}
 function shortcutDisplay(shortcut) {
   if (!shortcut) return i18n.t('shortcut.none');
   const parts = String(shortcut).split('+').filter(Boolean);
@@ -2760,8 +2853,15 @@ function handleShortcutInput(input, target) {
       return true;
     }
     const shortcut = shortcutFromInput(input);
-    if (shortcut) finishShortcutCapture(shortcut);
-    return !!shortcut;
+    if (!shortcut) return false;
+    if (isBareGameKey(input)) {
+      // Swallow the key (return true) so it does not leak into the page behind the
+      // settings route, but leave the button recording — the user just tries again.
+      showToast(i18n.t('shortcut.bare_key_rejected'));
+      return true;
+    }
+    finishShortcutCapture(shortcut);
+    return true;
   }
   if (isEditableTarget(target) && !input.alt && !input.meta && !input.control) return false;
   settings.speedShortcuts = normalizeSpeedShortcuts(settings.speedShortcuts);
@@ -2977,7 +3077,9 @@ function recordHistory(tab) {
     }
     return;
   }
-  history.unshift({ url: tab.url, title: tab.title || tab.url, visitedAt: now, profileId: tab.profileId });
+  // titleStale = the title on the tab is the previous page's (see did-navigate).
+  const recTitle = tab.titleStale ? tab.url : (tab.title || tab.url);
+  history.unshift({ url: tab.url, title: recTitle, visitedAt: now, profileId: tab.profileId });
   if (history.length > HISTORY_LIMIT) history.length = HISTORY_LIMIT;
   saveHistorySoon();
   if (currentRoute === 'home') renderHomeContinue();
@@ -3029,7 +3131,9 @@ function renderHomeContinue() {
     c.innerHTML = placeholderHtml(i18n.t('home.empty_history'), EMPTY_ASSETS.recent, 'grid-column:1/-1;padding:20px;height:auto;');
     return;
   }
-  for (const e of items) c.appendChild(cardEl(e, () => openUrl(e.url)));
+  // History rows remember which account the page was open on; without it the card
+  // reopens the game on whatever account the window happens to be on.
+  for (const e of items) c.appendChild(cardEl(e, () => openUrl(e.url, e.profileId ? { profileId: e.profileId } : undefined)));
 }
 function renderHomeFavorites() {
   const c = $('home-favorites'); c.innerHTML = '';
@@ -3107,9 +3211,11 @@ function entryEl(e, kind) {
       '<button data-act="new">' + escapeHtml(i18n.t('common.new_window')) + '</button>' +
       '<button data-act="del">' + escapeHtml(i18n.t('common.remove')) + '</button>' +
     '</div>';
-  el.addEventListener('click', (ev) => { if (!ev.target.closest('.e-actions')) openUrl(e.url); });
-  el.querySelector('[data-act="open"]').addEventListener('click', (ev) => { ev.stopPropagation(); openUrl(e.url); });
-  el.querySelector('[data-act="new"]').addEventListener('click', (ev) => { ev.stopPropagation(); ipcRenderer.invoke('window:open', e.url); });
+  // Recent rows carry profileId (bookmarks do not) — keep the account when reopening.
+  const openOpts = () => (e.profileId ? { profileId: e.profileId } : undefined);
+  el.addEventListener('click', (ev) => { if (!ev.target.closest('.e-actions')) openUrl(e.url, openOpts()); });
+  el.querySelector('[data-act="open"]').addEventListener('click', (ev) => { ev.stopPropagation(); openUrl(e.url, openOpts()); });
+  el.querySelector('[data-act="new"]').addEventListener('click', (ev) => { ev.stopPropagation(); ipcRenderer.invoke('window:open', e.url, e.profileId || undefined); });
   el.querySelector('[data-act="del"]').addEventListener('click', (ev) => {
     ev.stopPropagation();
     const arr = kind === 'rec' ? history : bookmarks;
@@ -3550,9 +3656,9 @@ async function openSelectedAccounts(grid) {
     ipcRenderer.invoke('window:open-accounts-grid', payload);
     return;
   }
-  payload.forEach((account, index) => {
-    setTimeout(() => ipcRenderer.invoke('window:open', account.url, account.profileId), Math.min(8000, index * 700));
-  });
+  // One IPC, main opens them one at a time and waits for each window to report ready —
+  // a fixed 700ms ladder either raced ahead of the plugin or dragged on for no reason.
+  ipcRenderer.invoke('window:open-accounts', payload);
 }
 function openAccountEditor(account) {
   ensureProfiles();
